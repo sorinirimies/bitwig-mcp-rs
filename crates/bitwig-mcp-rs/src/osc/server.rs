@@ -16,9 +16,9 @@ use rosc::OscType;
 use serde::Deserialize;
 use serde_json::Value as Json;
 
-use crate::bitwig::Bitwig;
 use crate::midi::{self, Note};
-use crate::protocol::{flag, parse_arg};
+use crate::osc::client::Bitwig;
+use crate::osc::wire::{flag, parse_arg};
 
 type ToolResult = Result<String, McpError>;
 
@@ -471,12 +471,12 @@ pub struct OscGetArgs {
 
 /// The MCP server: one Bitwig connection plus the tool router.
 #[derive(Debug, Clone)]
-pub struct BitwigServer {
+pub struct OscServer {
     bw: Arc<Bitwig>,
     tool_router: ToolRouter<Self>,
 }
 
-impl BitwigServer {
+impl OscServer {
     /// Wraps a connection.
     #[must_use]
     pub fn new(bw: Arc<Bitwig>) -> Self {
@@ -572,7 +572,7 @@ impl BitwigServer {
 }
 
 #[tool_router]
-impl BitwigServer {
+impl OscServer {
     // ------------------------------------------------------------ reading state
 
     #[tool(
@@ -1614,8 +1614,8 @@ impl BitwigServer {
             .tempo_bpm
             .or_else(|| {
                 self.bw.with_state(|st| match st.get("/tempo/raw") {
-                    Some(crate::state::Value::Float(f)) => Some(*f),
-                    Some(crate::state::Value::Int(i)) => Some(*i as f64),
+                    Some(crate::osc::state::Value::Float(f)) => Some(*f),
+                    Some(crate::osc::state::Value::Int(i)) => Some(*i as f64),
                     _ => None,
                 })
             })
@@ -1680,7 +1680,7 @@ impl BitwigServer {
     }
 }
 
-#[tool_handler(router = self.tool_router, name = "bitwig-mcp-rs", instructions = "Controls Bitwig Studio through the DrivenByMoss Open Sound Control extension. \
+#[tool_handler(router = self.tool_router, name = "bitwig-mcp-rs-osc", instructions = "Controls Bitwig Studio through the DrivenByMoss Open Sound Control extension. \
 Call get_overview first to see tracks, scenes, the transport and the selected device. \
 Track/scene/slot/parameter indices are 1-based positions in the current bank window \
 (default 8 items); move the window with scroll_track_bank / scroll_scene_bank. \
@@ -1688,19 +1688,19 @@ Levels are normalized 0.0-1.0 (pan 0.5 = center; volume ~0.79 is about 0 dB). \
 Parameters of a device are reached by selecting the device (select_device_*) then \
 set_device_param. Notes cannot be written into a clip directly: use record_midi_clip, which \
 records them live, or play_notes to audition. osc_send / osc_get reach anything else.")]
-impl rmcp::ServerHandler for BitwigServer {}
+impl rmcp::ServerHandler for OscServer {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::protocol::decode;
+    use crate::osc::wire::decode;
     use rosc::OscMessage;
     use tokio::net::UdpSocket;
 
     struct Rig {
         fake: UdpSocket,
-        server: BitwigServer,
+        server: OscServer,
     }
 
     impl Rig {
@@ -1714,7 +1714,7 @@ mod tests {
             let bw = Arc::new(Bitwig::connect(&cfg).await.expect("connect"));
             Self {
                 fake,
-                server: BitwigServer::new(bw),
+                server: OscServer::new(bw),
             }
         }
 
@@ -1981,7 +1981,7 @@ mod tests {
             ("/track/1/exists", OscType::Int(1)),
             ("/track/1/name", OscType::String("Kick".into())),
         ] {
-            let bytes = crate::protocol::encode(addr, vec![arg]).expect("encode");
+            let bytes = crate::osc::wire::encode(addr, vec![arg]).expect("encode");
             r.fake
                 .send_to(&bytes, ("127.0.0.1", to))
                 .await
@@ -1999,7 +1999,7 @@ mod tests {
 
     #[test]
     fn every_tool_is_registered_with_a_description() {
-        let tools = BitwigServer::tool_router().list_all();
+        let tools = OscServer::tool_router().list_all();
         assert!(tools.len() > 90, "only {} tools", tools.len());
         for t in &tools {
             assert!(

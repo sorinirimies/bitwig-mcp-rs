@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 bitwig-mcp-rs = { path = "../crates/bitwig-mcp-rs" }
+serde_json = "1"
 
 # Not part of the main workspace (needs nightly).
 [workspace]
@@ -17,6 +18,13 @@ bitwig-mcp-rs = { path = "../crates/bitwig-mcp-rs" }
 [[bin]]
 name = "decode_osc"
 path = "fuzz_targets/decode_osc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bridge_frames"
+path = "fuzz_targets/bridge_frames.rs"
 test = false
 doc = false
 bench = false

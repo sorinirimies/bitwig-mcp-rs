@@ -1,17 +1,16 @@
-//! MCP server that controls Bitwig Studio over OSC, through the
-//! [DrivenByMoss](https://www.mossgrabers.de/Software/Bitwig/Bitwig.html) "Open Sound Control"
-//! controller extension.
+//! MCP server that controls Bitwig Studio.
 //!
-//! Layers, bottom up:
-//! * [`config`]: command line + environment settings (pure).
-//! * [`protocol`]: OSC encode/decode and value scaling (pure).
-//! * [`state`]: the cache of every value Bitwig reports, plus the JSON overview (pure).
-//! * [`bitwig`]: UDP sockets: sends commands, keeps the state cache fresh.
-//! * [`server`]: the MCP tools; each one maps to one or more OSC commands.
+//! Two backends:
+//! * [`bridge`] (default): our own Bitwig extension over TCP. Full access.
+//! * [`osc`]: the DrivenByMoss OSC extension. No extension of ours needed, but a bank window
+//!   only and no note writing.
+//!
+//! Pure modules: [`config`], [`music`], [`midi`], [`hardware`], [`bridge::protocol`],
+//! [`bridge::project`], [`osc::wire`], [`osc::state`].
 
-pub mod bitwig;
+pub mod bridge;
 pub mod config;
+pub mod hardware;
 pub mod midi;
-pub mod protocol;
-pub mod server;
-pub mod state;
+pub mod music;
+pub mod osc;

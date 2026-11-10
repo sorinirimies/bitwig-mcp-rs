@@ -7,7 +7,7 @@ use rosc::{OscMessage, OscType};
 use serde::Serialize;
 use serde_json::{Value as Json, json};
 
-use crate::protocol::Scale;
+use crate::osc::wire::Scale;
 
 /// One reported value.
 #[derive(Debug, Clone, PartialEq, Serialize)]

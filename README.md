@@ -19,22 +19,29 @@ static, Windows x86-64) from the [latest release](https://github.com/sorinirimie
 ## How it works
 
 ```
-MCP client (Claude, Zed, pi, ...)  <-- stdio / MCP -->  bitwig-mcp-rs  <-- OSC / UDP -->  Bitwig Studio
-                                                                          (DrivenByMoss "Open Sound Control")
+MCP client (Claude, Zed, pi, ...) ⇄ stdio/MCP ⇄ bitwig-mcp-rs ⇄ TCP/JSON ⇄ MCP bridge extension (in Bitwig)
 ```
 
-The server needs the free [DrivenByMoss](https://www.mossgrabers.de/Software/Bitwig/Bitwig.html)
-extension in Bitwig. It exposes ~100 tools (transport, mixer, scenes and clips, devices,
-the browser, live MIDI, an `osc_send` escape hatch) and reads Bitwig's state back
-(`get_overview`, `get_mixer`, `get_device`, `get_browser`, `osc_get`).
+Two backends:
 
-### 1. Set up Bitwig
+| | **bridge** (default) | **osc** (`--backend osc`) |
+|---|---|---|
+| Bitwig side | our extension, `bitwig-bridge/` | [DrivenByMoss](https://www.mossgrabers.de/Software/Bitwig/Bitwig.html) "Open Sound Control" |
+| Tracks | all (64 main + 16 effect + master), by name | a window of 8, by bank position |
+| Clip notes | written and read exactly | recorded live only |
+| Devices | load by name/preset/CLAP/VST3, every remote-control page | browser stepping |
+| Tools | ~30, names or numbers, dB, replies with Bitwig's state | ~100 low-level |
 
-1. Install DrivenByMoss (Bitwig 5.2+).
-2. *Settings → Controllers → Add controller → Moss → Open Sound Control*.
-3. Set **Host to send to** `127.0.0.1`, **Port to send to** `9000`, **Port to receive on** `8000`.
-   Optional: raise *Value resolution* (e.g. 1024) for finer faders, and *Bank page size*
-   to address more than 8 tracks at once. Tell the server with `--resolution` / `--bank-size`.
+### 1. Install the bridge extension
+
+```sh
+just bridge-install     # needs a JDK (17+); builds target/bridge/bitwig-mcp-rs.bwextension
+```
+
+copies it into `~/Bitwig Studio/Extensions` (Linux) or `~/Documents/Bitwig Studio/Extensions`
+(macOS, Windows). Then in Bitwig: *Settings → Controllers → Add controller →
+bitwig-mcp-rs → MCP bridge*. It listens on TCP port 8417 (changeable in the controller's
+settings).
 
 ### 2. Add the server to your MCP client
 
@@ -46,19 +53,43 @@ the browser, live MIDI, an `osc_send` escape hatch) and reads Bitwig's state bac
 }
 ```
 
-Options (flag or environment variable): `--host` / `BITWIG_HOST` (127.0.0.1),
-`--send-port` / `BITWIG_SEND_PORT` (8000), `--listen-port` / `BITWIG_LISTEN_PORT` (9000),
-`--resolution` / `BITWIG_RESOLUTION` (128), `--bank-size` / `BITWIG_BANK_SIZE` (8).
-Logs go to stderr (`RUST_LOG=debug`).
+Options (flag or environment variable): `--backend` / `BITWIG_BACKEND` (bridge),
+`--host` / `BITWIG_HOST` (127.0.0.1), `--bridge-port` / `BITWIG_BRIDGE_PORT` (8417),
+`--instruments-dir` / `BITWIG_INSTRUMENTS_DIR` (`~/.config/bitwig-mcp-rs/instruments`);
+for the OSC backend `--send-port` (8000), `--listen-port` (9000), `--resolution` (128),
+`--bank-size` (8). Logs go to stderr (`RUST_LOG=debug`).
+
+### What the model can do
+
+* **Read:** `get_project`, `get_track`, `get_device`, `read_notes`, `status`; resources
+  `bitwig://project`, `bitwig://instruments`, `bitwig://protocol`.
+* **Build:** `create_track` (kind, name, color, position and a device or preset in one call),
+  `create_scene`, `create_clip` (with exact notes: `{"note": "C3", "start": 0, "length": 0.5}`),
+  `write_notes`, `insert_device`.
+* **Mix and play:** `set_track` (volume or `volume_db`, pan, mute, solo, arm, sends),
+  `set_device_param` (by parameter name), `transport`, `set_transport`, `clip_action`,
+  `scene_action`.
+* **Everything else:** `list_actions` + `invoke_action` reach every Bitwig menu command
+  (save, export, group, consolidate, …); `history` undoes.
+* **Prompts:** `sketch_song`, `mix_check`, `setup_hardware_synth`.
+
+### Hardware synths
+
+Put Bitwig's **HW Instrument** device on a track (MIDI out = your synth's port, audio in =
+the inputs it is plugged into). Then `play_notes`, `send_midi`, `hardware_program_change` and
+`hardware_set` on that track reach the synth through Bitwig, which keeps owning the MIDI port.
+`hardware_set` maps parameter names to CC / 14-bit CC / NRPN via instrument profiles: a
+built-in General MIDI one (`cutoff`, `resonance`, `attack`, …) plus your own TOML files in
+`~/.config/bitwig-mcp-rs/instruments/` (format in `src/hardware.rs`; the
+`setup_hardware_synth` prompt has the model write one). SysEx is not supported.
 
 ### Limits
 
-OSC gives a *window* (bank) of tracks, scenes and device parameters, not the whole project.
-Indices are 1-based positions in that window; scroll it with `scroll_track_bank` and
-`scroll_scene_bank`. There is no way to write notes into a clip directly: `record_midi_clip`
-records a note list live (wall-clock timing, quantize afterwards), `play_notes` auditions.
-Anything the extension supports but has no tool for is reachable with `osc_send`
-([OSC reference](https://github.com/git-moss/DrivenByMoss-Documentation/blob/master/Generic-Tools-Protocols/Open-Sound-Control-(OSC).md)).
+The bridge sees the first 64 main tracks, 16 effect tracks, 64 scenes and 16 devices per
+track. Clips are launcher clips (the Bitwig API cannot place clips in the arrangement; record
+the launcher into the arranger). Editing a clip or device moves Bitwig's selection to it.
+The JSON protocol between server and extension is in `bitwig-bridge/protocol.schema.json`
+(generated from `src/bridge/protocol.rs`; `just schema`).
 
 Not affiliated with Bitwig GmbH.
 
@@ -66,6 +97,8 @@ Not affiliated with Bitwig GmbH.
 
 ```sh
 just              # list tasks
+just bridge-install   # build + install the Bitwig extension (JDK 17+)
+just test-live    # end-to-end against a running Bitwig with the bridge added
 just check-all    # the quality gate: fmt, clippy, tests, versions, nu tests
 just fuzz-all     # every cargo-fuzz target (nightly)
 just audit deny   # supply chain
@@ -77,12 +110,16 @@ just release-all 0.2.0   # … to GitHub and Gitea
 Layout:
 
 ```
-crates/bitwig-mcp-rs/   the crate: config, protocol, state, midi (pure) + bitwig (UDP) + server (MCP tools)
-                  + main.rs (wiring) + tests/ (end-to-end over real stdio)
-fuzz/             cargo-fuzz targets (nightly), one per parser/decoder
-scripts/          all tooling, Nushell only (justfile recipes run in nu too):
-                  version, bump, release, remotes, CI helpers, quality gate —
-                  each with tests in scripts/tests/
+crates/bitwig-mcp-rs/   the server
+  src/bridge/           protocol (wire types, framing), client (TCP), project (name
+                        resolution), server (MCP tools, resources, prompts)
+  src/osc/              DrivenByMoss backend
+  src/music.rs …        pure helpers: dB, note names, note grid, hardware profiles
+  tests/                end-to-end over real stdio; live.rs against Bitwig (ignored)
+bitwig-bridge/          the Bitwig extension (Java 17, no dependencies, built by
+                        scripts/bridge.nu) + protocol.schema.json
+fuzz/                   cargo-fuzz targets: OSC decoding, bridge framing
+scripts/                all tooling, Nushell only, each with tests in scripts/tests/
 ```
 
 CI runs on GitHub **and** Gitea (a nu test keeps the two in sync): quality gate,

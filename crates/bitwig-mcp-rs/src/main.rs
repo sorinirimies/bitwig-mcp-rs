@@ -2,9 +2,11 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use bitwig_mcp_rs::bitwig::Bitwig;
-use bitwig_mcp_rs::config::{Cli, Config, HELP};
-use bitwig_mcp_rs::server::BitwigServer;
+use bitwig_mcp_rs::bridge::client::Bridge;
+use bitwig_mcp_rs::bridge::server::BridgeServer;
+use bitwig_mcp_rs::config::{Backend, Cli, Config, HELP};
+use bitwig_mcp_rs::osc::client::Bitwig;
+use bitwig_mcp_rs::osc::server::OscServer;
 use rmcp::{ServiceExt, transport::stdio};
 
 #[tokio::main]
@@ -43,21 +45,43 @@ async fn run(cfg: Config) -> Result<()> {
         )
         .init();
 
-    let bw = Arc::new(Bitwig::connect(&cfg).await?);
+    match cfg.backend {
+        Backend::Bridge => run_bridge(&cfg).await,
+        Backend::Osc => run_osc(&cfg).await,
+    }
+}
+
+async fn run_bridge(cfg: &Config) -> Result<()> {
+    let bridge = Arc::new(Bridge::new(&cfg.host, cfg.bridge_port));
+    tracing::info!(
+        bridge = bridge.addr(),
+        instruments = %cfg.instruments_dir.display(),
+        "bitwig-mcp-rs {} ready (bridge backend)",
+        env!("CARGO_PKG_VERSION")
+    );
+    let service = BridgeServer::new(bridge, cfg.instruments_dir.clone())
+        .serve(stdio())
+        .await
+        .context("MCP handshake failed")?;
+    service.waiting().await.context("MCP session failed")?;
+    Ok(())
+}
+
+async fn run_osc(cfg: &Config) -> Result<()> {
+    let bw = Arc::new(Bitwig::connect(cfg).await?);
     tracing::info!(
         host = %cfg.host,
         send_port = cfg.send_port,
         listen_port = cfg.listen_port,
         listening = bw.listening(),
-        "bitwig-mcp-rs {} ready",
+        "bitwig-mcp-rs {} ready (osc backend)",
         env!("CARGO_PKG_VERSION")
     );
     // Prime the state cache; the answer arrives while the client initializes.
     if let Err(e) = bw.refresh().await {
         tracing::warn!("initial refresh failed: {e:#}");
     }
-
-    let service = BitwigServer::new(bw)
+    let service = OscServer::new(bw)
         .serve(stdio())
         .await
         .context("MCP handshake failed")?;

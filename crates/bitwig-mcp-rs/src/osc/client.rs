@@ -10,8 +10,8 @@ use tokio::net::{UdpSocket, lookup_host};
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::protocol::{self, Scale};
-use crate::state::State;
+use crate::osc::state::State;
+use crate::osc::wire::{self, Scale};
 
 /// Handle to a running Bitwig connection.
 #[derive(Debug)]
@@ -105,10 +105,10 @@ impl Bitwig {
     /// # Errors
     /// For an invalid address or when the datagram cannot be sent.
     pub async fn send(&self, addr: &str, args: Vec<OscType>) -> Result<()> {
-        if let Err(e) = protocol::check_address(addr) {
+        if let Err(e) = wire::check_address(addr) {
             bail!(e);
         }
-        let bytes = protocol::encode(addr, args)?;
+        let bytes = wire::encode(addr, args)?;
         tracing::debug!(addr, "send");
         self.socket
             .send(&bytes)
@@ -159,7 +159,7 @@ async fn listen(sock: UdpSocket, state: Arc<Mutex<State>>) {
     loop {
         match sock.recv_from(&mut buf).await {
             Ok((n, _)) => {
-                let msgs = protocol::decode(&buf[..n]);
+                let msgs = wire::decode(&buf[..n]);
                 if msgs.is_empty() {
                     continue;
                 }
@@ -201,7 +201,7 @@ mod tests {
             .await
             .expect("timeout")
             .expect("recv");
-        let msgs = protocol::decode(&buf[..n]);
+        let msgs = wire::decode(&buf[..n]);
         assert_eq!(msgs[0].addr, "/play");
         assert_eq!(msgs[0].args, vec![OscType::Int(1)]);
     }
@@ -219,8 +219,8 @@ mod tests {
         let bw = Bitwig::connect(&cfg).await.expect("connect");
         assert!(bw.listening());
         let to = bw.listen_addr().expect("listen addr");
-        let bytes = protocol::encode("/track/1/name", vec![OscType::String("Lead".into())])
-            .expect("encode");
+        let bytes =
+            wire::encode("/track/1/name", vec![OscType::String("Lead".into())]).expect("encode");
         fake.send_to(&bytes, ("127.0.0.1", to.port()))
             .await
             .expect("send");

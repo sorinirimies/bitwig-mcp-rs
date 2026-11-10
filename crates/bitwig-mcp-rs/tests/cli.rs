@@ -50,11 +50,11 @@ fn rpc(
     serde_json::from_str(&line).unwrap_or_else(|e| panic!("bad reply {line:?}: {e}"))
 }
 
-#[test]
-fn speaks_mcp_and_lists_tools() {
+/// Starts the server with `args`, does the MCP handshake and returns the tool names and the
+/// server name.
+fn tools(args: &[&str]) -> (String, Vec<String>) {
     let mut child = bin()
-        // ports that nothing uses; the server must still start and answer MCP
-        .args(["--send-port", "18000", "--listen-port", "0"])
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -75,29 +75,59 @@ fn speaks_mcp_and_lists_tools() {
             }
         }),
     );
-    assert_eq!(
-        init["result"]["serverInfo"]["name"], "bitwig-mcp-rs",
-        "{init}"
-    );
-
+    let name = init["result"]["serverInfo"]["name"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     writeln!(
         stdin,
         "{}",
         serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
     )
     .expect("write");
-
     let tools = rpc(
         &mut stdin,
         &mut stdout,
         &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
     );
-    let names: Vec<&str> = tools["result"]["tools"]
+    let names = tools["result"]["tools"]
         .as_array()
         .expect("tools array")
         .iter()
-        .filter_map(|t| t["name"].as_str())
+        .filter_map(|t| t["name"].as_str().map(str::to_owned))
         .collect();
+    drop(stdin);
+    let _ = child.wait();
+    (name, names)
+}
+
+#[test]
+fn bridge_backend_speaks_mcp_without_bitwig() {
+    // Nothing listens on the bridge port: the server must still start and list its tools.
+    let (name, names) = tools(&["--bridge-port", "1"]);
+    assert_eq!(name, "bitwig-mcp-rs");
+    for want in [
+        "get_project",
+        "create_track",
+        "set_track",
+        "create_clip",
+        "hardware_set",
+    ] {
+        assert!(names.iter().any(|n| n == want), "missing {want}");
+    }
+}
+
+#[test]
+fn osc_backend_speaks_mcp() {
+    let (name, names) = tools(&[
+        "--backend",
+        "osc",
+        "--send-port",
+        "18000",
+        "--listen-port",
+        "0",
+    ]);
+    assert_eq!(name, "bitwig-mcp-rs-osc");
     for want in [
         "get_overview",
         "play",
@@ -105,9 +135,6 @@ fn speaks_mcp_and_lists_tools() {
         "record_midi_clip",
         "osc_send",
     ] {
-        assert!(names.contains(&want), "missing {want}");
+        assert!(names.iter().any(|n| n == want), "missing {want}");
     }
-
-    drop(stdin);
-    let _ = child.wait();
 }

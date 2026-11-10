@@ -1,0 +1,1488 @@
+{
+  "framing": "u32 big-endian length + UTF-8 JSON",
+  "protocol_version": 1,
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "A reply frame.",
+    "properties": {
+      "error": {
+        "default": null,
+        "description": "Message on failure.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "id": {
+        "description": "The request id.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "ok": {
+        "description": "Success.",
+        "type": "boolean"
+      },
+      "result": {
+        "default": null,
+        "description": "Result on success."
+      }
+    },
+    "required": [
+      "id",
+      "ok"
+    ],
+    "title": "Reply",
+    "type": "object"
+  },
+  "request": {
+    "$defs": {
+      "ClipAction": {
+        "description": "Actions on a clip slot.",
+        "oneOf": [
+          {
+            "const": "launch",
+            "description": "Launch the clip.",
+            "type": "string"
+          },
+          {
+            "const": "stop",
+            "description": "Stop the track's clips.",
+            "type": "string"
+          },
+          {
+            "const": "select",
+            "description": "Select the slot.",
+            "type": "string"
+          },
+          {
+            "const": "record",
+            "description": "Start recording into the slot.",
+            "type": "string"
+          },
+          {
+            "const": "delete",
+            "description": "Delete the clip.",
+            "type": "string"
+          },
+          {
+            "const": "duplicate",
+            "description": "Duplicate the clip.",
+            "type": "string"
+          },
+          {
+            "const": "show",
+            "description": "Open the clip in the editor.",
+            "type": "string"
+          }
+        ]
+      },
+      "DeviceAction": {
+        "description": "Actions on a device.",
+        "oneOf": [
+          {
+            "const": "enable",
+            "description": "Enable (un-bypass).",
+            "type": "string"
+          },
+          {
+            "const": "disable",
+            "description": "Disable (bypass).",
+            "type": "string"
+          },
+          {
+            "const": "toggle",
+            "description": "Toggle enabled.",
+            "type": "string"
+          },
+          {
+            "const": "delete",
+            "description": "Delete it.",
+            "type": "string"
+          },
+          {
+            "const": "duplicate",
+            "description": "Duplicate it.",
+            "type": "string"
+          },
+          {
+            "const": "open_window",
+            "description": "Open the plugin window.",
+            "type": "string"
+          },
+          {
+            "const": "close_window",
+            "description": "Close the plugin window.",
+            "type": "string"
+          },
+          {
+            "const": "next_preset",
+            "description": "Load the next preset.",
+            "type": "string"
+          },
+          {
+            "const": "previous_preset",
+            "description": "Load the previous preset.",
+            "type": "string"
+          },
+          {
+            "const": "select",
+            "description": "Select it (cursor device follows).",
+            "type": "string"
+          }
+        ]
+      },
+      "DeviceSource": {
+        "description": "What to insert.",
+        "oneOf": [
+          {
+            "description": "Search the browser for a result whose name matches (exact first, then substring),\nin the given browser tab (\"Devices\", \"Presets\", ...).",
+            "properties": {
+              "content_type": {
+                "description": "Browser content type; default \"Devices\".",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "browser",
+                "type": "string"
+              },
+              "name": {
+                "description": "Name to search for, case-insensitive.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A CLAP plugin by id.",
+            "properties": {
+              "id": {
+                "description": "e.g. \"org.surge-synth-team.surge-xt\".",
+                "type": "string"
+              },
+              "kind": {
+                "const": "clap",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A VST3 plugin by id.",
+            "properties": {
+              "id": {
+                "description": "The VST3 class id.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "vst3",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A file (preset, sample, ...) by absolute path.",
+            "properties": {
+              "kind": {
+                "const": "file",
+                "type": "string"
+              },
+              "path": {
+                "description": "Absolute path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GridNote": {
+        "description": "One note on the grid of a clip.",
+        "properties": {
+          "duration": {
+            "description": "Length in beats.",
+            "format": "double",
+            "type": "number"
+          },
+          "key": {
+            "description": "MIDI key 0-127.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "velocity": {
+            "description": "Velocity 1-127.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x": {
+            "description": "Step index (start = x · step).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "key",
+          "velocity",
+          "duration"
+        ],
+        "type": "object"
+      },
+      "Rgb": {
+        "description": "RGB color, 0-255 per channel.",
+        "maxItems": 3,
+        "minItems": 3,
+        "prefixItems": [
+          {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        ],
+        "type": "array"
+      },
+      "SceneAction": {
+        "description": "Actions on a scene.",
+        "oneOf": [
+          {
+            "const": "launch",
+            "description": "Launch every clip in the row.",
+            "type": "string"
+          },
+          {
+            "const": "select",
+            "description": "Select it.",
+            "type": "string"
+          },
+          {
+            "const": "duplicate",
+            "description": "Duplicate it.",
+            "type": "string"
+          },
+          {
+            "const": "delete",
+            "description": "Delete it.",
+            "type": "string"
+          }
+        ]
+      },
+      "SendLevel": {
+        "description": "One send level.",
+        "properties": {
+          "index": {
+            "description": "0-based send index.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "volume": {
+            "description": "Normalized level.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "volume"
+        ],
+        "type": "object"
+      },
+      "TrackAction": {
+        "description": "Actions on a track.",
+        "oneOf": [
+          {
+            "const": "select",
+            "description": "Select it (cursor track follows).",
+            "type": "string"
+          },
+          {
+            "const": "duplicate",
+            "description": "Duplicate it.",
+            "type": "string"
+          },
+          {
+            "const": "delete",
+            "description": "Delete it.",
+            "type": "string"
+          },
+          {
+            "const": "stop_clips",
+            "description": "Stop its launcher clips.",
+            "type": "string"
+          },
+          {
+            "const": "return_to_arrangement",
+            "description": "Switch it back to arrangement playback.",
+            "type": "string"
+          },
+          {
+            "const": "show",
+            "description": "Scroll it into view in arranger and mixer.",
+            "type": "string"
+          }
+        ]
+      },
+      "TrackAddr": {
+        "description": "A resolved track.",
+        "properties": {
+          "bank": {
+            "$ref": "#/$defs/TrackBank",
+            "description": "The list."
+          },
+          "index": {
+            "description": "0-based position in that list.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bank",
+          "index"
+        ],
+        "type": "object"
+      },
+      "TrackBank": {
+        "description": "Which track list a track lives in.",
+        "oneOf": [
+          {
+            "const": "main",
+            "description": "Audio, instrument and group tracks, flattened (group children included).",
+            "type": "string"
+          },
+          {
+            "const": "effect",
+            "description": "Effect (return) tracks.",
+            "type": "string"
+          },
+          {
+            "const": "master",
+            "description": "The master track (index is always 0).",
+            "type": "string"
+          }
+        ]
+      },
+      "TrackKind": {
+        "description": "Kind of track to create.",
+        "oneOf": [
+          {
+            "const": "audio",
+            "description": "Audio track.",
+            "type": "string"
+          },
+          {
+            "const": "instrument",
+            "description": "Instrument track.",
+            "type": "string"
+          },
+          {
+            "const": "effect",
+            "description": "Effect (return) track.",
+            "type": "string"
+          }
+        ]
+      },
+      "TransportAction": {
+        "description": "Transport actions.",
+        "oneOf": [
+          {
+            "const": "play",
+            "description": "Start playback.",
+            "type": "string"
+          },
+          {
+            "const": "stop",
+            "description": "Stop playback.",
+            "type": "string"
+          },
+          {
+            "const": "toggle_play",
+            "description": "Toggle play/stop.",
+            "type": "string"
+          },
+          {
+            "const": "record",
+            "description": "Toggle arranger recording.",
+            "type": "string"
+          },
+          {
+            "const": "restart",
+            "description": "Restart from the play start position.",
+            "type": "string"
+          },
+          {
+            "const": "rewind",
+            "description": "Rewind.",
+            "type": "string"
+          },
+          {
+            "const": "fast_forward",
+            "description": "Fast forward.",
+            "type": "string"
+          },
+          {
+            "const": "tap_tempo",
+            "description": "Tap tempo once.",
+            "type": "string"
+          },
+          {
+            "const": "stop_all_clips",
+            "description": "Stop every clip in the launcher.",
+            "type": "string"
+          },
+          {
+            "const": "add_cue_marker",
+            "description": "Add a cue marker at the play position.",
+            "type": "string"
+          },
+          {
+            "const": "next_cue_marker",
+            "description": "Jump to the next cue marker.",
+            "type": "string"
+          },
+          {
+            "const": "previous_cue_marker",
+            "description": "Jump to the previous cue marker.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "A request frame.",
+    "oneOf": [
+      {
+        "description": "Handshake: returns `{protocol, extension_version, api_version}`.",
+        "properties": {
+          "cmd": {
+            "const": "hello",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Full snapshot: transport, application, tracks, effect tracks, master, scenes.",
+        "properties": {
+          "cmd": {
+            "const": "get_project",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Run a transport action.",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/TransportAction",
+            "description": "The action."
+          },
+          "cmd": {
+            "const": "transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd",
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Change transport settings; replies with the transport snapshot.",
+        "properties": {
+          "arranger_overdub": {
+            "description": "Arranger overdub.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "automation_mode": {
+            "description": "\"latch\", \"touch\" or \"write\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "automation_write": {
+            "description": "Arranger automation write.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "cmd": {
+            "const": "set_transport",
+            "type": "string"
+          },
+          "launch_quantization": {
+            "description": "Default launch quantization: \"none\", \"8\", \"4\", \"2\", \"1\", \"1/2\", \"1/4\", \"1/8\", \"1/16\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "launcher_overdub": {
+            "description": "Launcher overdub.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "loop": {
+            "description": "Arranger loop on/off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "loop_length": {
+            "description": "Loop length in beats.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "loop_start": {
+            "description": "Loop start in beats.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "metronome": {
+            "description": "Metronome on/off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "position": {
+            "description": "Play position in beats.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pre_roll": {
+            "description": "\"none\", \"one_bar\", \"two_bars\" or \"four_bars\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "punch_in": {
+            "description": "Punch in.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "punch_out": {
+            "description": "Punch out.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tempo": {
+            "description": "Tempo in BPM.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "time_signature": {
+            "description": "Time signature like \"4/4\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Create a track; replies `{bank, index}` of the new track.",
+        "properties": {
+          "cmd": {
+            "const": "create_track",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/TrackKind",
+            "description": "Kind."
+          },
+          "position": {
+            "description": "0-based position in the main list, -1 = end (ignored for effect tracks).",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cmd",
+          "kind",
+          "position"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Change a track; replies with its snapshot after the change settled.",
+        "properties": {
+          "activated": {
+            "description": "Activated.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "arm": {
+            "description": "Record arm.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "cmd": {
+            "const": "set_track",
+            "type": "string"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rgb"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New color."
+          },
+          "monitor_mode": {
+            "description": "Monitor mode: \"ON\", \"OFF\" or \"AUTO\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mute": {
+            "description": "Mute.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "New name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pan": {
+            "description": "Pan, normalized (0.5 = center).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "sends": {
+            "description": "Send levels.",
+            "items": {
+              "$ref": "#/$defs/SendLevel"
+            },
+            "type": "array"
+          },
+          "solo": {
+            "description": "Solo.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          },
+          "volume": {
+            "description": "Volume, normalized.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cmd",
+          "track"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Run an action on a track.",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/TrackAction",
+            "description": "The action."
+          },
+          "cmd": {
+            "const": "track_action",
+            "type": "string"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Create a scene at the end; replies `{index}`.",
+        "properties": {
+          "cmd": {
+            "const": "create_scene",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Change a scene.",
+        "properties": {
+          "cmd": {
+            "const": "set_scene",
+            "type": "string"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rgb"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New color."
+          },
+          "name": {
+            "description": "New name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scene": {
+            "description": "0-based scene.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cmd",
+          "scene"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Run an action on a scene.",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/SceneAction",
+            "description": "The action."
+          },
+          "cmd": {
+            "const": "scene_action",
+            "type": "string"
+          },
+          "scene": {
+            "description": "0-based scene.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cmd",
+          "scene",
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Create an empty launcher clip.",
+        "properties": {
+          "cmd": {
+            "const": "create_clip",
+            "type": "string"
+          },
+          "length": {
+            "description": "Length in whole beats.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slot": {
+            "description": "0-based slot.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "slot",
+          "length"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Run an action on a clip slot.",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/ClipAction",
+            "description": "The action."
+          },
+          "cmd": {
+            "const": "clip_action",
+            "type": "string"
+          },
+          "slot": {
+            "description": "0-based slot.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "slot",
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Change a clip (focuses it in the editor).",
+        "properties": {
+          "cmd": {
+            "const": "set_clip",
+            "type": "string"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rgb"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New color."
+          },
+          "loop_enabled": {
+            "description": "Loop on/off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "loop_length": {
+            "description": "Loop length in beats.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "New name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantize": {
+            "description": "Quantize amount 0-1 (applied once).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "slot": {
+            "description": "0-based slot.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          },
+          "transpose": {
+            "description": "Transpose by semitones (applied once).",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "slot"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Write notes into a launcher clip at exact grid positions.",
+        "properties": {
+          "clear": {
+            "description": "Remove existing notes first.",
+            "type": "boolean"
+          },
+          "cmd": {
+            "const": "write_notes",
+            "type": "string"
+          },
+          "notes": {
+            "description": "The notes.",
+            "items": {
+              "$ref": "#/$defs/GridNote"
+            },
+            "type": "array"
+          },
+          "slot": {
+            "description": "0-based slot (must hold a clip).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step": {
+            "description": "Grid step in beats.",
+            "format": "double",
+            "type": "number"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "slot",
+          "step",
+          "clear",
+          "notes"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Read the notes of a launcher clip on a grid.",
+        "properties": {
+          "cmd": {
+            "const": "read_notes",
+            "type": "string"
+          },
+          "slot": {
+            "description": "0-based slot.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step": {
+            "description": "Grid step in beats.",
+            "format": "double",
+            "type": "number"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "slot",
+          "step"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Insert a device; replies when the browser committed or the plugin was inserted.",
+        "oneOf": [
+          {
+            "description": "End of the track's chain.",
+            "properties": {
+              "at": {
+                "const": "end",
+                "type": "string"
+              }
+            },
+            "required": [
+              "at"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Start of the track's chain.",
+            "properties": {
+              "at": {
+                "const": "start",
+                "type": "string"
+              }
+            },
+            "required": [
+              "at"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "After the device at this 0-based index.",
+            "properties": {
+              "at": {
+                "const": "after",
+                "type": "string"
+              },
+              "device": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "at",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Before the device at this 0-based index.",
+            "properties": {
+              "at": {
+                "const": "before",
+                "type": "string"
+              },
+              "device": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "at",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Replace the device at this 0-based index.",
+            "properties": {
+              "at": {
+                "const": "replace",
+                "type": "string"
+              },
+              "device": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "at",
+              "device"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "cmd": {
+            "const": "insert_device",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/DeviceSource",
+            "description": "What."
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "source"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "A device with its remote-control pages and the parameters of one page.",
+        "properties": {
+          "cmd": {
+            "const": "get_device",
+            "type": "string"
+          },
+          "device": {
+            "description": "0-based device in the track's chain.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "page": {
+            "description": "0-based remote-control page; default: the current one.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "device"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Set a remote-control parameter; replies with its new value and display text.",
+        "properties": {
+          "cmd": {
+            "const": "set_device_param",
+            "type": "string"
+          },
+          "device": {
+            "description": "0-based device.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "page": {
+            "description": "0-based remote-control page; default: the current one.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "param": {
+            "description": "0-based parameter on the page (0-7).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          },
+          "value": {
+            "description": "Normalized value.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "device",
+          "param",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Run an action on a device.",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/DeviceAction",
+            "description": "The action."
+          },
+          "cmd": {
+            "const": "device_action",
+            "type": "string"
+          },
+          "device": {
+            "description": "0-based device.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "device",
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Play notes on a track for a duration (audition, or capture while recording).",
+        "properties": {
+          "cmd": {
+            "const": "play_notes",
+            "type": "string"
+          },
+          "duration_ms": {
+            "description": "Hold time in milliseconds.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "keys": {
+            "description": "MIDI keys.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          },
+          "velocity": {
+            "description": "Velocity 1-127.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "keys",
+          "velocity",
+          "duration_ms"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Send raw MIDI messages to a track (e.g. on to a hardware instrument).",
+        "properties": {
+          "cmd": {
+            "const": "send_midi",
+            "type": "string"
+          },
+          "messages": {
+            "description": "The messages, in order.",
+            "items": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "messages"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "List Bitwig application actions (menu commands) whose id or name contains `query`.",
+        "properties": {
+          "cmd": {
+            "const": "list_actions",
+            "type": "string"
+          },
+          "query": {
+            "description": "Case-insensitive filter; empty = all.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd",
+          "query"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Invoke an application action by id.",
+        "properties": {
+          "cmd": {
+            "const": "invoke_action",
+            "type": "string"
+          },
+          "id": {
+            "description": "Action id from `list_actions`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd",
+          "id"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Undo the last edit.",
+        "properties": {
+          "cmd": {
+            "const": "undo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Redo.",
+        "properties": {
+          "cmd": {
+            "const": "redo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Change the window: layout and/or toggle a panel.",
+        "properties": {
+          "cmd": {
+            "const": "set_view",
+            "type": "string"
+          },
+          "layout": {
+            "description": "\"ARRANGE\", \"MIX\" or \"EDIT\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "toggle": {
+            "description": "\"inspector\", \"devices\", \"mixer\", \"note_editor\", \"automation_editor\", \"browser\",\n\"fullscreen\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "type": "object"
+      }
+    ],
+    "properties": {
+      "id": {
+        "description": "Correlates the reply.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "title": "Request",
+    "type": "object"
+  },
+  "title": "bitwig-mcp-rs bridge protocol"
+}

@@ -4,23 +4,43 @@ use std::fmt;
 
 /// Help text printed for `--help`.
 pub const HELP: &str = "\
-bitwig-mcp-rs - MCP server that controls Bitwig Studio over OSC (DrivenByMoss)
+bitwig-mcp-rs - MCP server that controls Bitwig Studio
 
 Usage: bitwig-mcp-rs [OPTIONS]
   Speaks MCP on stdin/stdout. Logs go to stderr (RUST_LOG=debug for more).
 
 Options (each also reads the environment variable in brackets):
-      --host <HOST>          Bitwig host                      [BITWIG_HOST, 127.0.0.1]
-      --send-port <PORT>     Port Bitwig listens on           [BITWIG_SEND_PORT, 8000]
-      --listen-port <PORT>   Port Bitwig sends to (we bind)   [BITWIG_LISTEN_PORT, 9000]
-      --resolution <N>       DrivenByMoss value resolution    [BITWIG_RESOLUTION, 128]
-      --bank-size <N>        DrivenByMoss bank page size      [BITWIG_BANK_SIZE, 8]
+      --backend <B>          bridge (our extension) or osc     [BITWIG_BACKEND, bridge]
+      --host <HOST>          Bitwig host                       [BITWIG_HOST, 127.0.0.1]
+      --bridge-port <PORT>   Bridge extension TCP port         [BITWIG_BRIDGE_PORT, 8417]
+      --instruments-dir <D>  Hardware instrument profiles      [BITWIG_INSTRUMENTS_DIR,
+                                                  ~/.config/bitwig-mcp-rs/instruments]
+  OSC backend (DrivenByMoss):
+      --send-port <PORT>     Port Bitwig listens on            [BITWIG_SEND_PORT, 8000]
+      --listen-port <PORT>   Port Bitwig sends to (we bind)    [BITWIG_LISTEN_PORT, 9000]
+      --resolution <N>       DrivenByMoss value resolution     [BITWIG_RESOLUTION, 128]
+      --bank-size <N>        DrivenByMoss bank page size       [BITWIG_BANK_SIZE, 8]
   -h, --help                 Print help
   -V, --version              Print version";
 
-/// Connection settings. Defaults match the DrivenByMoss OSC controller defaults.
+/// Which Bitwig extension to talk to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    /// Our bridge extension over TCP.
+    Bridge,
+    /// DrivenByMoss over OSC/UDP.
+    Osc,
+}
+
+/// Connection settings. OSC defaults match the DrivenByMoss OSC controller defaults.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    /// Backend.
+    pub backend: Backend,
+    /// Bridge extension TCP port.
+    pub bridge_port: u16,
+    /// Hardware instrument profile directory.
+    pub instruments_dir: std::path::PathBuf,
     /// Host running Bitwig.
     pub host: String,
     /// UDP port Bitwig receives commands on.
@@ -36,6 +56,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            backend: Backend::Bridge,
+            bridge_port: 8417,
+            instruments_dir: std::path::PathBuf::from("instruments"),
             host: "127.0.0.1".into(),
             send_port: 8000,
             listen_port: 9000,
@@ -74,6 +97,16 @@ fn number<T: std::str::FromStr>(name: &str, v: &str) -> Result<T, UsageError> {
         .map_err(|_| UsageError(format!("invalid value for {name}: {v:?}")))
 }
 
+fn backend(v: &str) -> Result<Backend, UsageError> {
+    match v.trim().to_lowercase().as_str() {
+        "bridge" => Ok(Backend::Bridge),
+        "osc" => Ok(Backend::Osc),
+        _ => Err(UsageError(format!(
+            "backend must be bridge or osc, not {v:?}"
+        ))),
+    }
+}
+
 impl Config {
     /// Builds the settings: environment first, then flags override.
     ///
@@ -86,6 +119,22 @@ impl Config {
         E: Fn(&str) -> Option<String>,
     {
         let mut cfg = Self::default();
+        let home = env("HOME").or_else(|| env("USERPROFILE"));
+        let config_home = env("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| home.map(|h| std::path::Path::new(&h).join(".config")));
+        if let Some(c) = config_home {
+            cfg.instruments_dir = c.join("bitwig-mcp-rs").join("instruments");
+        }
+        if let Some(v) = env("BITWIG_INSTRUMENTS_DIR") {
+            cfg.instruments_dir = v.into();
+        }
+        if let Some(v) = env("BITWIG_BACKEND") {
+            cfg.backend = backend(&v)?;
+        }
+        if let Some(v) = env("BITWIG_BRIDGE_PORT") {
+            cfg.bridge_port = number("BITWIG_BRIDGE_PORT", &v)?;
+        }
         if let Some(v) = env("BITWIG_HOST") {
             cfg.host = v;
         }
@@ -116,6 +165,9 @@ impl Config {
             };
             match flag.as_str() {
                 "--host" => cfg.host = value()?,
+                "--backend" => cfg.backend = backend(&value()?)?,
+                "--bridge-port" => cfg.bridge_port = number(&flag, &value()?)?,
+                "--instruments-dir" => cfg.instruments_dir = value()?.into(),
                 "--send-port" => cfg.send_port = number(&flag, &value()?)?,
                 "--listen-port" => cfg.listen_port = number(&flag, &value()?)?,
                 "--resolution" => cfg.resolution = number(&flag, &value()?)?,
@@ -148,6 +200,50 @@ mod tests {
     #[test]
     fn defaults() {
         assert_eq!(parse(&[]), Ok(Cli::Run(Config::default())));
+    }
+
+    #[test]
+    fn backend_and_bridge_options() {
+        let Ok(Cli::Run(c)) = parse(&[
+            "--backend",
+            "OSC",
+            "--bridge-port",
+            "9999",
+            "--instruments-dir",
+            "/x",
+        ]) else {
+            panic!("expected Run")
+        };
+        assert_eq!((c.backend, c.bridge_port), (Backend::Osc, 9999));
+        assert_eq!(c.instruments_dir, std::path::PathBuf::from("/x"));
+        assert!(parse(&["--backend", "midi"]).is_err());
+    }
+
+    #[test]
+    fn instruments_dir_follows_xdg_then_home() {
+        let env = |k: &str| match k {
+            "HOME" => Some("/home/u".to_owned()),
+            _ => None,
+        };
+        let Ok(Cli::Run(c)) = Config::parse(Vec::new(), env) else {
+            panic!()
+        };
+        assert_eq!(
+            c.instruments_dir,
+            std::path::PathBuf::from("/home/u/.config/bitwig-mcp-rs/instruments")
+        );
+        let env = |k: &str| match k {
+            "HOME" => Some("/home/u".to_owned()),
+            "XDG_CONFIG_HOME" => Some("/cfg".to_owned()),
+            _ => None,
+        };
+        let Ok(Cli::Run(c)) = Config::parse(Vec::new(), env) else {
+            panic!()
+        };
+        assert_eq!(
+            c.instruments_dir,
+            std::path::PathBuf::from("/cfg/bitwig-mcp-rs/instruments")
+        );
     }
 
     #[test]

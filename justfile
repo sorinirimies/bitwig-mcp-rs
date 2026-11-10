@@ -43,6 +43,28 @@ install:
 run *args:
     cargo run -q -p bitwig-mcp-rs -- {{ args }}
 
+# ── Bitwig bridge extension ───────────────────────────────────────────────────
+
+# Build the Bitwig extension → target/bridge/bitwig-mcp-rs.bwextension (needs a JDK)
+bridge-build:
+    nu scripts/bridge.nu build
+
+# Build and copy the extension into Bitwig's Extensions folder
+bridge-install:
+    nu scripts/bridge.nu install
+
+# The extension's plain-Java tests
+bridge-test:
+    nu scripts/bridge.nu test
+
+# Regenerate bitwig-bridge/protocol.schema.json from the Rust protocol types
+schema:
+    $env.UPDATE_SCHEMA = "1"; cargo test -q -p bitwig-mcp-rs checked_in_schema_is_current
+
+# End-to-end against a running Bitwig with the bridge added (creates and deletes a test track)
+test-live:
+    cargo test -p bitwig-mcp-rs --test live -- --ignored --nocapture
+
 # ── Test & quality ────────────────────────────────────────────────────────────
 
 # Rust tests
