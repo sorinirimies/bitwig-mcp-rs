@@ -1,35 +1,17 @@
-//! Rust MCP server that controls Bitwig Studio over OSC (DrivenByMoss)
+//! MCP server that controls Bitwig Studio over OSC, through the
+//! [DrivenByMoss](https://www.mossgrabers.de/Software/Bitwig/Bitwig.html) "Open Sound Control"
+//! controller extension.
 //!
-//! Keep the logic here, pure and testable (take data and a `now`, return data);
-//! `main.rs` only wires the outside world (args, files, clock) to it.
+//! Layers, bottom up:
+//! * [`config`]: command line + environment settings (pure).
+//! * [`protocol`]: OSC encode/decode and value scaling (pure).
+//! * [`state`]: the cache of every value Bitwig reports, plus the JSON overview (pure).
+//! * [`bitwig`]: UDP sockets: sends commands, keeps the state cache fresh.
+//! * [`server`]: the MCP tools; each one maps to one or more OSC commands.
 
-/// Splits a `key = value` line. Comments (`#`) and blank lines give `None`.
-#[must_use]
-pub fn parse_kv(line: &str) -> Option<(&str, &str)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return None;
-    }
-    let (k, v) = line.split_once('=')?;
-    let k = k.trim();
-    (!k.is_empty()).then(|| (k, v.trim()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn splits_and_trims() {
-        assert_eq!(parse_kv(" a = b "), Some(("a", "b")));
-        assert_eq!(parse_kv("a=b=c"), Some(("a", "b=c")));
-    }
-
-    #[test]
-    fn skips_comments_blanks_and_empty_keys() {
-        assert_eq!(parse_kv("# a = b"), None);
-        assert_eq!(parse_kv("   "), None);
-        assert_eq!(parse_kv(" = b"), None);
-        assert_eq!(parse_kv("no equals"), None);
-    }
-}
+pub mod bitwig;
+pub mod config;
+pub mod midi;
+pub mod protocol;
+pub mod server;
+pub mod state;

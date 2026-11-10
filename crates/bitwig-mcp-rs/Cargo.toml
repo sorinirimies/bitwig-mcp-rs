@@ -2,8 +2,8 @@
 name = "bitwig-mcp-rs"
 description = "Rust MCP server that controls Bitwig Studio over OSC (DrivenByMoss)"
 readme = "../../README.md"
-keywords = []
-categories = ["command-line-utilities"]
+keywords = ["bitwig", "mcp", "osc", "midi", "daw"]
+categories = ["command-line-utilities", "multimedia::audio"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -21,9 +21,20 @@ name = "bitwig-mcp-rs"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = { workspace = true }
+rmcp = { workspace = true }
+rosc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

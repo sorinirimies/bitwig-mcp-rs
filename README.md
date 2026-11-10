@@ -16,11 +16,51 @@ cargo install bitwig-mcp-rs
 or download the archive for your platform (macOS arm64/x86-64, Linux arm64/x86-64
 static, Windows x86-64) from the [latest release](https://github.com/sorinirimies/bitwig-mcp-rs/releases).
 
-## Use
+## How it works
 
-```sh
-printf 'a = 1\nb = 2\n' | bitwig-mcp-rs
 ```
+MCP client (Claude, Zed, pi, ...)  <-- stdio / MCP -->  bitwig-mcp-rs  <-- OSC / UDP -->  Bitwig Studio
+                                                                          (DrivenByMoss "Open Sound Control")
+```
+
+The server needs the free [DrivenByMoss](https://www.mossgrabers.de/Software/Bitwig/Bitwig.html)
+extension in Bitwig. It exposes ~100 tools (transport, mixer, scenes and clips, devices,
+the browser, live MIDI, an `osc_send` escape hatch) and reads Bitwig's state back
+(`get_overview`, `get_mixer`, `get_device`, `get_browser`, `osc_get`).
+
+### 1. Set up Bitwig
+
+1. Install DrivenByMoss (Bitwig 5.2+).
+2. *Settings → Controllers → Add controller → Moss → Open Sound Control*.
+3. Set **Host to send to** `127.0.0.1`, **Port to send to** `9000`, **Port to receive on** `8000`.
+   Optional: raise *Value resolution* (e.g. 1024) for finer faders, and *Bank page size*
+   to address more than 8 tracks at once. Tell the server with `--resolution` / `--bank-size`.
+
+### 2. Add the server to your MCP client
+
+```json
+{
+  "mcpServers": {
+    "bitwig": { "command": "bitwig-mcp-rs" }
+  }
+}
+```
+
+Options (flag or environment variable): `--host` / `BITWIG_HOST` (127.0.0.1),
+`--send-port` / `BITWIG_SEND_PORT` (8000), `--listen-port` / `BITWIG_LISTEN_PORT` (9000),
+`--resolution` / `BITWIG_RESOLUTION` (128), `--bank-size` / `BITWIG_BANK_SIZE` (8).
+Logs go to stderr (`RUST_LOG=debug`).
+
+### Limits
+
+OSC gives a *window* (bank) of tracks, scenes and device parameters, not the whole project.
+Indices are 1-based positions in that window; scroll it with `scroll_track_bank` and
+`scroll_scene_bank`. There is no way to write notes into a clip directly: `record_midi_clip`
+records a note list live (wall-clock timing, quantize afterwards), `play_notes` auditions.
+Anything the extension supports but has no tool for is reachable with `osc_send`
+([OSC reference](https://github.com/git-moss/DrivenByMoss-Documentation/blob/master/Generic-Tools-Protocols/Open-Sound-Control-(OSC).md)).
+
+Not affiliated with Bitwig GmbH.
 
 ## Development
 
@@ -37,7 +77,8 @@ just release-all 0.2.0   # … to GitHub and Gitea
 Layout:
 
 ```
-crates/bitwig-mcp-rs/   the crate: lib.rs (pure logic) + main.rs (I/O) + tests/ (end-to-end)
+crates/bitwig-mcp-rs/   the crate: config, protocol, state, midi (pure) + bitwig (UDP) + server (MCP tools)
+                  + main.rs (wiring) + tests/ (end-to-end over real stdio)
 fuzz/             cargo-fuzz targets (nightly), one per parser/decoder
 scripts/          all tooling, Nushell only (justfile recipes run in nu too):
                   version, bump, release, remotes, CI helpers, quality gate —

@@ -15,8 +15,8 @@ bitwig-mcp-rs = { path = "../crates/bitwig-mcp-rs" }
 [workspace]
 
 [[bin]]
-name = "parse_kv"
-path = "fuzz_targets/parse_kv.rs"
+name = "decode_osc"
+path = "fuzz_targets/decode_osc.rs"
 test = false
 doc = false
 bench = false
