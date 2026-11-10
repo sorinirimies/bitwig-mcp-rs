@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master, develop]
+  workflow_dispatch:
+    inputs:
+      full_matrix:
+        description: Also test on macOS and Windows (automatic on public repos)
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # fmt + clippy + tests + versions + nu tests —
+  # the same script `just check-all` runs.
+  gate:
+    name: quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+      - name: Install system packages
+        run: nu scripts/ci/apt.nu
+      - name: Quality gate
+        run: nu scripts/ci/quality_gate.nu
+
+  # The binary ships for all three systems: paths, line endings and process
+  # handling differ there.
+  test:
+    name: test (${{ matrix.os }})
+    # A private repo pays 10x for macOS and 2x for Windows minutes: there this
+    # runs only when dispatched with full_matrix.
+    if: ${{ !github.event.repository.private || inputs.full_matrix }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test --workspace
+        run: cargo test --workspace --all-features
+
+  # The Linux release binaries are static musl ones (any distro); skipped when
+  # scripts/project.nu sets LINUX to "gnu".
+  musl:
+    name: musl (static)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install musl tools
+        run: |
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+      - name: Install system packages
+        run: nu scripts/ci/apt.nu
+      - name: Build, statically linked and runs
+        run: nu scripts/ci/check_static.nu x86_64-unknown-linux-musl --build
+
+  msrv:
+    name: MSRV (1.90)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # @master + toolchain, not @1.90: Dependabot would bump a version ref.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.90"
+      - uses: Swatinem/rust-cache@v2
+      - uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+      - name: Install system packages
+        run: nu scripts/ci/apt.nu
+      - name: cargo check
+        run: cargo check --workspace --locked

@@ -1,0 +1,22 @@
+[package]
+name = "bitwig-mcp-rs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bitwig-mcp-rs = { path = "../crates/bitwig-mcp-rs" }
+
+# Not part of the main workspace (needs nightly).
+[workspace]
+
+[[bin]]
+name = "parse_kv"
+path = "fuzz_targets/parse_kv.rs"
+test = false
+doc = false
+bench = false

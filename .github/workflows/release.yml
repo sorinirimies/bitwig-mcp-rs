@@ -1,0 +1,170 @@
+name: Release
+
+# Push a vX.Y.Z tag (`just release X.Y.Z`): validate tag == Cargo.toml → gate →
+# build the binaries in scripts/project.nu for macOS (arm64, x86-64), Linux
+# (static musl arm64, x86-64) and Windows → GitHub release with the archives +
+# sha256 and git-cliff notes → crates.io, every crate in scripts/project.nu (only
+# if the CRATES_IO_TOKEN secret is set; idempotent).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+      - name: Validate tag
+        id: v
+        run: nu scripts/ci/validate_tag.nu "${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - name: Versions match the tag
+        run: nu scripts/ci/check_versions.nu "${{ steps.v.outputs.tag }}"
+      - name: Build matrix
+        id: m
+        run: nu scripts/project.nu matrix >> "$GITHUB_OUTPUT"
+
+  gate:
+    name: Quality gate
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+      - name: Install system packages
+        run: nu scripts/ci/apt.nu
+      - run: nu scripts/ci/quality_gate.nu
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [validate, gate]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      # release_matrix in scripts/project.nu: the targets for its LINUX flavour.
+      matrix: ${{ fromJSON(needs.validate.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+      - name: Install system packages
+        run: nu scripts/ci/apt.nu
+      # Static Linux binaries for both architectures from one runner: zig is the
+      # C cross-compiler for any bundled C code (sqlite, zstd, …).
+      - name: Install zig
+        if: matrix.zig
+        uses: mlugg/setup-zig@v2
+      - name: Install cargo-zigbuild
+        if: matrix.zig
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - name: Build (zig)
+        if: matrix.zig
+        run: nu scripts/ci/build_release.nu ${{ matrix.target }} --zig
+      - name: Build
+        if: ${{ !matrix.zig }}
+        run: nu scripts/ci/build_release.nu ${{ matrix.target }}
+      - name: Package
+        run: nu scripts/ci/package.nu ${{ matrix.target }} --out dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+
+  publish:
+    name: GitHub release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          fetch-depth: 0
+      - uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+      - name: Release notes
+        run: nu scripts/ci/release_notes.nu ${{ needs.validate.outputs.tag }}
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: Bitwig MCP ${{ needs.validate.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          files: dist/*
+      - name: Keep binaries only on the newest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nu scripts/ci/prune_releases.nu ${{ needs.validate.outputs.tag }}
+
+  crates-io:
+    name: crates.io
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+      - name: Install system packages
+        run: nu scripts/ci/apt.nu
+      # Every crate in scripts/project.nu, dependencies first.
+      - name: Publish crates (idempotent)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: nu scripts/ci/publish_crate.nu
+

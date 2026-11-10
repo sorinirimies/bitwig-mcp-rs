@@ -1,0 +1,29 @@
+[package]
+name = "bitwig-mcp-rs"
+description = "Rust MCP server that controls Bitwig Studio over OSC (DrivenByMoss)"
+readme = "../../README.md"
+keywords = []
+categories = ["command-line-utilities"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "bitwig_mcp_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bitwig-mcp-rs"
+path = "src/main.rs"
+
+[dependencies]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
