@@ -3,7 +3,7 @@ name: Release
 # Push a vX.Y.Z tag (`just release X.Y.Z`): validate tag == Cargo.toml → gate →
 # build the binaries in scripts/project.nu for macOS (arm64, x86-64), Linux
 # (static musl arm64, x86-64) and Windows → GitHub release with the archives +
-# sha256 and git-cliff notes → crates.io, every crate in scripts/project.nu (only
+# sha256, the Bitwig extension (.bwextension) and git-cliff notes → crates.io, every crate in scripts/project.nu (only
 # if the CRATES_IO_TOKEN secret is set; idempotent).
 
 on:
@@ -66,6 +66,10 @@ jobs:
           version: "0.116.1"
       - name: Install system packages
         run: nu scripts/ci/apt.nu
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
       - run: nu scripts/ci/quality_gate.nu
 
   build:
@@ -137,6 +141,12 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Bitwig extension
+        run: nu scripts/bridge.nu package --out dist
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate.outputs.tag }}

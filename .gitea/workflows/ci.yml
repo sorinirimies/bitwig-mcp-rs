@@ -40,6 +40,10 @@ jobs:
           nu --version
       - name: Install system packages
         run: nu scripts/ci/apt.nu
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
       - name: Quality gate
         run: nu scripts/ci/quality_gate.nu
 

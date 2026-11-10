@@ -47,6 +47,10 @@ jobs:
           cargo install cargo-zigbuild git-cliff --locked
       - name: Install system packages
         run: nu scripts/ci/apt.nu
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
       - name: Validate tag
         id: v
         run: nu scripts/ci/validate_tag.nu "${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
@@ -56,6 +60,8 @@ jobs:
         run: nu scripts/ci/quality_gate.nu
       - name: Build and package
         run: nu scripts/ci/build_release.nu gitea --out dist
+      - name: Bitwig extension
+        run: nu scripts/bridge.nu package --out dist
       - name: Release notes
         run: nu scripts/ci/release_notes.nu ${{ steps.v.outputs.tag }}
       - name: Create Gitea release

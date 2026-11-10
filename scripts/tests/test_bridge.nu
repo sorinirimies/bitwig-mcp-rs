@@ -3,7 +3,7 @@
 
 use std/assert
 use runner.nu *
-use ../bridge.nu [api_url extensions_dir build_info schema_protocol API_VERSION API_SHA256]
+use ../bridge.nu [api_url extensions_dir build_info schema_protocol asset_name missing_javac API_VERSION API_SHA256]
 
 def "test bridge: api url points at the Bitwig maven" [] {
     assert equal (api_url 25) "https://maven.bitwig.com/com/bitwig/extension-api/25/extension-api-25.jar"
@@ -32,6 +32,15 @@ def "test bridge: protocol version comes from the schema" [] {
     let root = ($env.CURRENT_FILE | path dirname | path join ".." "..")
     let schema = (open ($root | path join "bitwig-bridge" "protocol.schema.json"))
     assert ((schema_protocol $schema) >= 1)
+}
+
+def "test bridge: release asset name carries the version" [] {
+    assert equal (asset_name "1.2.3") "bitwig-mcp-rs-bridge-1.2.3.bwextension"
+}
+
+def "test bridge: CI fails without javac, developers skip" [] {
+    assert equal (missing_javac true) "fail"
+    assert equal (missing_javac false) "skip"
 }
 
 def main [] { run-tests }

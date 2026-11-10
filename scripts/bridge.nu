@@ -11,7 +11,9 @@
 #   nu scripts/bridge.nu build      # → target/bridge/bitwig-mcp-rs.bwextension
 #   nu scripts/bridge.nu test       # plain-Java unit tests
 #   nu scripts/bridge.nu install    # build + copy into Bitwig's Extensions folder
-#   nu scripts/bridge.nu check      # build + test; skipped without javac (quality gate)
+#   nu scripts/bridge.nu check      # build + test (quality gate); without javac: skipped
+#                                   # locally, an error in CI
+#   nu scripts/bridge.nu package --out dist   # release asset + .sha256
 # ──────────────────────────────────────────────────────────────────────────────
 
 use version.nu [cargo_version]
@@ -24,6 +26,16 @@ const PKG = "io/github/sorinirimies/bitwigmcp"
 # Maven URL of Bitwig's extension API jar.
 export def api_url [version: int]: nothing -> string {
     $"https://maven.bitwig.com/com/bitwig/extension-api/($version)/extension-api-($version).jar"
+}
+
+# File name of the release asset for a version.
+export def asset_name [version: string]: nothing -> string {
+    $"bitwig-mcp-rs-bridge-($version).bwextension"
+}
+
+# What to do without javac: CI must build the extension, a developer may skip it.
+export def missing_javac [ci: bool]: nothing -> string {
+    if $ci { "fail" } else { "skip" }
 }
 
 # Where Bitwig looks for extensions on each OS.
@@ -114,6 +126,19 @@ def "main test" []: nothing -> nothing {
     ^java -ea -cp $out io.github.sorinirimies.bitwigmcp.JsonTest
 }
 
+def "main package" [--out: path = "dist"]: nothing -> nothing {
+    main build
+    let r = (root)
+    let version = (cargo_version (open ($r | path join "Cargo.toml")))
+    mkdir $out
+    let asset = (asset_name $version)
+    let dest = ($out | path join $asset)
+    cp ($r | path join "target" "bridge" $ARTIFACT) $dest
+    let sum = (open --raw $dest | hash sha256)
+    $"($sum)  ($asset)\n" | save --force $"($dest).sha256"
+    print -e $"📦 ($dest)"
+}
+
 def "main install" []: nothing -> nothing {
     main build
     let os = ($nu.os-info.name)
@@ -127,6 +152,9 @@ def "main install" []: nothing -> nothing {
 
 def "main check" []: nothing -> nothing {
     if (which javac | is-empty) {
+        if (missing_javac ($env | get -o CI | is-not-empty)) == "fail" {
+            error make {msg: "javac not found: CI must build the Bitwig extension (install a JDK 17+)"}
+        }
         print -e "⚠ javac not found: skipping the bridge build and tests"
         return
     }
@@ -135,5 +163,5 @@ def "main check" []: nothing -> nothing {
 }
 
 def main [] {
-    print -e "usage: nu scripts/bridge.nu build | test | install | check"
+    print -e "usage: nu scripts/bridge.nu build | test | install | check | package [--out dir]"
 }
