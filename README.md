@@ -78,10 +78,15 @@ for the OSC backend `--send-port` (8000), `--listen-port` (9000), `--resolution`
 Put Bitwig's **HW Instrument** device on a track (MIDI out = your synth's port, audio in =
 the inputs it is plugged into). Then `play_notes`, `send_midi`, `hardware_program_change` and
 `hardware_set` on that track reach the synth through Bitwig, which keeps owning the MIDI port.
-`hardware_set` maps parameter names to CC / 14-bit CC / NRPN via instrument profiles: a
-built-in General MIDI one (`cutoff`, `resonance`, `attack`, …) plus your own TOML files in
-`~/.config/bitwig-mcp-rs/instruments/` (format in `src/hardware.rs`; the
-`setup_hardware_synth` prompt has the model write one). SysEx is not supported.
+`hardware_set` maps parameter names to CC / 14-bit CC / NRPN / pitch bend / aftertouch via
+instrument profiles. Built in (`crates/bitwig-mcp-rs/instruments/`): a General MIDI one and
+the Behringer **Model D** (ch 1), **Crave** (2), **CAT** (3), **WASP Deluxe** (4), **Edge** (5)
+and **Solina** (6), taken from their manuals' MIDI charts. These are analog: only the Crave has
+real CCs (attack, decay, sustain, glide, tempo); the others take notes, pitch bend and, on the
+Model D and Wasp, the mod wheel. Set each synth and its HW Instrument device to the profile's
+channel (or change the channel in your own copy). Your own TOML files go in
+`~/.config/bitwig-mcp-rs/instruments/` and replace a built-in profile of the same name
+(format in `src/hardware.rs`). SysEx (Model D / Wasp settings) is not supported: use SynthTool.
 
 ### Limits
 

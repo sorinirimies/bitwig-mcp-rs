@@ -1,0 +1,18 @@
+# Behringer MODEL D — the manual documents MIDI settings by SysEx only (channel, key priority,
+# pitch-bend range, modulation curve, transpose). The "modulation curve" setting implies the
+# MIDI mod wheel (CC 1) drives the modulation amount: verify on your unit.
+name = "Model D"
+channel = 1
+notes = """Analog mono synth (Minimoog clone). MIDI: notes, pitch bend, mod wheel. All sound
+parameters are knobs. Settings (MIDI channel, key priority, bend range) need SysEx, which this
+server cannot send: use SynthTool. Set the channel with the rear DIP switches."""
+
+[params.mod_wheel]
+cc = 1
+description = "modulation amount (mod wheel); unverified, test it"
+[params.pitch_bend]
+pitch_bend = true
+description = "0.5 = center; range 0-12 semitones via SysEx (default 12)"
+[params.all_notes_off]
+cc = 123
+description = "send any value: stops hanging notes; unverified"

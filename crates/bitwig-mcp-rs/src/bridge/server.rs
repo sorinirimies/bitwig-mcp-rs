@@ -1326,6 +1326,7 @@ impl BridgeServer {
                 json!({
                     "name": p.name,
                     "channel": p.channel,
+                    "notes": p.notes,
                     "params": p.params,
                 })
             })
@@ -1487,12 +1488,15 @@ impl BridgeServer {
             Role::User,
             format!(
                 "Help me use my {synth} from Bitwig.\n\
-                 1. create_track kind instrument named \"{synth}\" with device \"HW Instrument\".\n\
-                 2. Tell me to pick the MIDI output port and audio input in that device.\n\
-                 3. play_notes a C major chord to test.\n\
-                 4. Write an instrument profile TOML for the {synth} from its MIDI implementation \
-                 (CC and NRPN numbers) for ~/.config/bitwig-mcp-rs/instruments/, check it with \
-                 list_instruments, then try hardware_set on its cutoff.",
+                 1. list_instruments: if a profile for the {synth} exists, use its channel, \
+                 notes and parameters; otherwise write one (TOML, from its MIDI implementation \
+                 chart) for ~/.config/bitwig-mcp-rs/instruments/ and check it loads.\n\
+                 2. create_track kind instrument named \"{synth}\" with device \"HW Instrument\".\n\
+                 3. Tell me to pick the MIDI output port, the MIDI channel from the profile and \
+                 the audio input in that device, and to set the synth to the same channel.\n\
+                 4. play_notes a chord (a single note for mono synths) to test.\n\
+                 5. Try a hardware_set parameter from the profile, if it has any, and explain \
+                 which knobs stay manual.",
                 synth = a.synth
             ),
         )]

@@ -1,0 +1,49 @@
+# Behringer CRAVE — from the official Quick Start Guide MIDI chart (MIDI information table).
+# Analog: oscillator/filter knobs are not MIDI-controllable. The digital envelope, glide and
+# tempo are. CC 1/2/4/7 drive the patch bay ASSIGN output when it is set to that CC.
+name = "Crave"
+channel = 2
+notes = """Semi-modular analog mono synth with sequencer. MIDI: notes, velocity, pitch bend,
+channel aftertouch, clock/start/stop (enable MIDI clock out for this port in Bitwig to sync the
+sequencer). Set the MIDI channel with the rear DIP switches or SynthTool to match `channel`."""
+
+[params.attack]
+cc = 50
+description = "envelope attack"
+[params.decay]
+cc = 51
+description = "envelope decay"
+[params.sustain]
+cc = 52
+description = "envelope sustain"
+[params.glide_time]
+cc = 5
+description = "glide (portamento) time"
+[params.glide]
+cc = 65
+values = ["on", "off"]
+description = "glide switch; note the chart's inverted values: 0 = on, 127 = off"
+[params.tempo]
+cc = 12
+description = "sequencer tempo"
+[params.mod_wheel]
+cc = 1
+description = "to the ASSIGN output when it is set to MIDI CC1"
+[params.breath]
+cc = 2
+description = "to the ASSIGN output when it is set to MIDI CC2"
+[params.foot]
+cc = 4
+description = "to the ASSIGN output when it is set to MIDI CC4"
+[params.cc7]
+cc = 7
+description = "to the ASSIGN output when it is set to MIDI CC7"
+[params.pitch_bend]
+pitch_bend = true
+description = "0.5 = center; range set by SysEx / SynthTool (default 12 semitones)"
+[params.aftertouch]
+channel_pressure = true
+description = "channel pressure, to the ASSIGN output when set to channel pressure"
+[params.all_notes_off]
+cc = 123
+description = "send any value: stops hanging notes (and the sequencer)"

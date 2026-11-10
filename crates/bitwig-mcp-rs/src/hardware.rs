@@ -23,7 +23,14 @@
 //! [params.osc1_wave]
 //! cc = 50
 //! values = ["saw", "triangle", "square"]   # named steps, spread evenly over 0-127
+//! [params.bend]
+//! pitch_bend = true            # 14-bit pitch bend, 0.5 = center
+//! [params.pressure]
+//! channel_pressure = true      # channel aftertouch
 //! ```
+//!
+//! Built-in profiles ship in `instruments/` (embedded at build time); a user file with the
+//! same `name` replaces the built-in one.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -44,6 +51,12 @@ pub struct Param {
     /// NRPN number 0-16383.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nrpn: Option<u16>,
+    /// Pitch bend (14-bit, 0.5 = center).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_bend: Option<bool>,
+    /// Channel pressure (aftertouch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_pressure: Option<bool>,
     /// Data resolution for NRPN: 7 or 14 bits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bits: Option<u8>,
@@ -63,6 +76,9 @@ pub struct Profile {
     /// Default MIDI channel 1-16.
     #[serde(default = "one")]
     pub channel: u8,
+    /// What the instrument can and cannot do over MIDI, for the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
     /// Parameters by name.
     #[serde(default)]
     pub params: BTreeMap<String, Param>,
@@ -99,10 +115,16 @@ impl Profile {
             return Err(format!("{}: channel must be 1-16", self.name));
         }
         for (name, p) in &self.params {
-            let kinds = [p.cc.is_some(), p.cc14.is_some(), p.nrpn.is_some()];
+            let kinds = [
+                p.cc.is_some(),
+                p.cc14.is_some(),
+                p.nrpn.is_some(),
+                p.pitch_bend == Some(true),
+                p.channel_pressure == Some(true),
+            ];
             if kinds.iter().filter(|k| **k).count() != 1 {
                 return Err(format!(
-                    "{}.{name}: set exactly one of cc, cc14, nrpn",
+                    "{}.{name}: set exactly one of cc, cc14, nrpn, pitch_bend, channel_pressure",
                     self.name
                 ));
             }
@@ -143,7 +165,10 @@ fn normalize(s: &str) -> String {
 
 impl Param {
     fn max(&self) -> u16 {
-        if self.cc14.is_some() || (self.nrpn.is_some() && self.bits == Some(14)) {
+        if self.cc14.is_some()
+            || self.pitch_bend == Some(true)
+            || (self.nrpn.is_some() && self.bits == Some(14))
+        {
             16383
         } else {
             127
@@ -186,6 +211,12 @@ impl Param {
         let status = 0xB0 | (channel - 1);
         let v = self.resolve(value)?;
         let (msb, lsb) = ((v >> 7) as u8, (v & 0x7F) as u8);
+        if self.pitch_bend == Some(true) {
+            return Ok(vec![[0xE0 | (channel - 1), lsb, msb]]);
+        }
+        if self.channel_pressure == Some(true) {
+            return Ok(vec![[0xD0 | (channel - 1), v as u8, 0]]);
+        }
         if let Some(cc) = self.cc {
             return Ok(vec![[status, cc, v as u8]]);
         }
@@ -240,6 +271,8 @@ pub fn generic() -> Profile {
         cc: Some(n),
         cc14: None,
         nrpn: None,
+        pitch_bend: None,
+        channel_pressure: None,
         bits: None,
         values: Vec::new(),
         description: Some(d.into()),
@@ -268,16 +301,58 @@ pub fn generic() -> Profile {
     Profile {
         name: "generic".into(),
         channel: 1,
+        notes: Some("General MIDI controllers; most synths understand a few of these.".into()),
         params,
     }
 }
 
-/// Loads every `*.toml` in `dir` plus the built-in generic profile. Broken files are reported,
-/// not fatal.
+/// Profiles shipped with the server (`instruments/*.toml`).
+const BUILTIN: [(&str, &str); 6] = [
+    (
+        "behringer-cat.toml",
+        include_str!("../instruments/behringer-cat.toml"),
+    ),
+    (
+        "behringer-crave.toml",
+        include_str!("../instruments/behringer-crave.toml"),
+    ),
+    (
+        "behringer-edge.toml",
+        include_str!("../instruments/behringer-edge.toml"),
+    ),
+    (
+        "behringer-model-d.toml",
+        include_str!("../instruments/behringer-model-d.toml"),
+    ),
+    (
+        "behringer-solina.toml",
+        include_str!("../instruments/behringer-solina.toml"),
+    ),
+    (
+        "behringer-wasp-deluxe.toml",
+        include_str!("../instruments/behringer-wasp-deluxe.toml"),
+    ),
+];
+
+/// The generic profile plus every built-in one. A broken built-in is reported, not fatal.
 #[must_use]
-pub fn load_dir(dir: &Path) -> (Vec<Profile>, Vec<String>) {
+pub fn builtin() -> (Vec<Profile>, Vec<String>) {
     let mut profiles = vec![generic()];
     let mut errors = Vec::new();
+    for (file, text) in BUILTIN {
+        match Profile::parse(text) {
+            Ok(p) => profiles.push(p),
+            Err(e) => errors.push(format!("built-in {file}: {e}")),
+        }
+    }
+    (profiles, errors)
+}
+
+/// The built-in profiles plus every `*.toml` in `dir`; a user profile replaces a built-in one
+/// with the same name. Broken files are reported, not fatal.
+#[must_use]
+pub fn load_dir(dir: &Path) -> (Vec<Profile>, Vec<String>) {
+    let (mut profiles, mut errors) = builtin();
     let Ok(entries) = std::fs::read_dir(dir) else {
         return (profiles, errors);
     };
@@ -292,7 +367,10 @@ pub fn load_dir(dir: &Path) -> (Vec<Profile>, Vec<String>) {
             .map_err(|e| e.to_string())
             .and_then(|t| Profile::parse(&t))
         {
-            Ok(p) => profiles.push(p),
+            Ok(p) => {
+                profiles.retain(|old| !old.name.eq_ignore_ascii_case(&p.name));
+                profiles.push(p);
+            }
             Err(e) => errors.push(format!("{}: {e}", path.display())),
         }
     }
@@ -389,6 +467,57 @@ values = ["saw", "triangle", "square"]
     }
 
     #[test]
+    fn pitch_bend_and_pressure() {
+        let p = Profile::parse(
+            "name = 'x'\n[params.bend]\npitch_bend = true\n[params.at]\nchannel_pressure = true",
+        )
+        .expect("parse");
+        let bend = p.param("bend").expect("bend").1;
+        assert_eq!(
+            bend.messages(1, &Value::Normalized(0.5)),
+            Ok(vec![[0xE0, 0, 64]])
+        );
+        assert_eq!(
+            bend.messages(3, &Value::Raw(16383)),
+            Ok(vec![[0xE2, 127, 127]])
+        );
+        let at = p.param("at").expect("at").1;
+        assert_eq!(at.messages(1, &Value::Raw(100)), Ok(vec![[0xD0, 100, 0]]));
+        assert!(Profile::parse("name = 'x'\n[params.a]\npitch_bend = true\ncc = 1").is_err());
+    }
+
+    #[test]
+    fn builtin_profiles_parse_and_use_distinct_channels() {
+        let (profiles, errors) = builtin();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(profiles.len(), 1 + BUILTIN.len());
+        let mut channels: Vec<u8> = profiles.iter().skip(1).map(|p| p.channel).collect();
+        channels.sort_unstable();
+        channels.dedup();
+        assert_eq!(
+            channels.len(),
+            BUILTIN.len(),
+            "one MIDI chain needs distinct channels"
+        );
+        for name in ["Crave", "CAT", "Model D", "Wasp", "Edge", "Solina"] {
+            let p = find(&profiles, name).unwrap_or_else(|| panic!("{name}"));
+            assert!(p.notes.is_some(), "{name} explains its MIDI");
+        }
+        // the Crave chart in hex: 0x32-0x34 = CC 50-52, 0x41 = CC 65 with inverted values
+        let crave = find(&profiles, "crave").expect("crave");
+        let msgs = |p: &str, v: Value| crave.param(p).expect(p).1.messages(2, &v);
+        assert_eq!(msgs("attack", Value::Raw(10)), Ok(vec![[0xB1, 50, 10]]));
+        assert_eq!(
+            msgs("glide", Value::Named("on".into())),
+            Ok(vec![[0xB1, 65, 0]])
+        );
+        assert_eq!(
+            msgs("glide", Value::Named("off".into())),
+            Ok(vec![[0xB1, 65, 127]])
+        );
+    }
+
+    #[test]
     fn program_change_with_bank() {
         assert_eq!(
             program_change(3, 10, Some(1), Some(2)),
@@ -405,12 +534,19 @@ values = ["saw", "triangle", "square"]
         std::fs::write(dir.join("a.toml"), SAMPLE).expect("write");
         std::fs::write(dir.join("broken.toml"), "nope =").expect("write");
         std::fs::write(dir.join("ignored.txt"), "x").expect("write");
+        std::fs::write(dir.join("my-crave.toml"), "name = 'CRAVE'\nchannel = 9").expect("write");
         let (profiles, errors) = load_dir(&dir);
         std::fs::remove_dir_all(&dir).ok();
-        assert_eq!(profiles.len(), 2);
+        let builtin_count = builtin().0.len();
+        assert_eq!(
+            profiles.len(),
+            builtin_count + 1,
+            "test synth added, crave replaced"
+        );
         assert!(find(&profiles, "test synth").is_some());
+        assert_eq!(find(&profiles, "crave").map(|p| p.channel), Some(9));
         assert_eq!(errors.len(), 1);
-        let (only_generic, none) = load_dir(Path::new("/definitely/not/here"));
-        assert_eq!((only_generic.len(), none.len()), (1, 0));
+        let (only_builtin, none) = load_dir(Path::new("/definitely/not/here"));
+        assert_eq!((only_builtin.len(), none.len()), (builtin_count, 0));
     }
 }
