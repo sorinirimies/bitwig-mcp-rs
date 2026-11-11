@@ -1,7 +1,9 @@
 name: Release
 
 # Gitea runners are Linux only: this builds the Linux binaries (gitea_targets in
-# scripts/project.nu) and publishes a Gitea release with them. The full set (macOS, Windows) comes from
+# scripts/project.nu) and the Bitwig extension, publishes a Gitea release with them, and
+# publishes the crate to crates.io when the CRATES_IO_TOKEN secret is set (idempotent, so
+# the GitHub release publishing too is harmless). The full set (macOS, Windows) comes from
 # the GitHub release.
 
 on:
@@ -72,3 +74,7 @@ jobs:
         env:
           GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: nu scripts/ci/prune_releases.nu ${{ steps.v.outputs.tag }} --gitea-api "${{ github.server_url }}/api/v1/repos/${{ github.repository }}"
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: nu scripts/ci/publish_crate.nu
