@@ -147,7 +147,7 @@ jobs:
           java-version: "17"
       - name: Bitwig extension
         run: nu scripts/bridge.nu package --out dist
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.validate.outputs.tag }}
           name: Bitwig MCP ${{ needs.validate.outputs.version }}
