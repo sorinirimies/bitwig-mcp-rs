@@ -36,7 +36,7 @@ jobs:
       - name: Install system packages
         run: nu scripts/ci/apt.nu
       # The gate builds the Bitwig extension (scripts/bridge.nu check).
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
