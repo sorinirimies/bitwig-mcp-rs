@@ -518,6 +518,12 @@ pub enum Command {
         /// The messages, in order.
         messages: Vec<Midi>,
     },
+    /// Send a SysEx message through the extension's MIDI output port (Track MIDI cannot carry
+    /// SysEx). Nothing is sent when no port is assigned to the controller.
+    SendSysex {
+        /// The complete message, `F0 … F7`.
+        bytes: Vec<u8>,
+    },
     /// List Bitwig application actions (menu commands) whose id or name contains `query`.
     ListActions {
         /// Case-insensitive filter; empty = all.

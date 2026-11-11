@@ -66,10 +66,14 @@ public class BridgeExtensionDefinition extends ControllerExtensionDefinition
       return 0;
    }
 
+   /**
+    * One optional MIDI output, used only for SysEx (hardware synth settings): Track MIDI
+    * cannot carry SysEx. Leave it unassigned if you don't need SysEx.
+    */
    @Override
    public int getNumMidiOutPorts()
    {
-      return 0;
+      return 1;
    }
 
    @Override

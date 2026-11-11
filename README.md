@@ -79,14 +79,20 @@ Put Bitwig's **HW Instrument** device on a track (MIDI out = your synth's port, 
 the inputs it is plugged into). Then `play_notes`, `send_midi`, `hardware_program_change` and
 `hardware_set` on that track reach the synth through Bitwig, which keeps owning the MIDI port.
 `hardware_set` maps parameter names to CC / 14-bit CC / NRPN / pitch bend / aftertouch via
-instrument profiles. Built in (`crates/bitwig-mcp-rs/instruments/`): a General MIDI one and
+instrument profiles from the [`synthazia-hardware`](https://crates.io/crates/synthazia-hardware)
+crate (shared with the Synthazia DAW). Built in: a General MIDI one and
 the Behringer **Model D** (ch 1), **Crave** (2), **CAT** (3), **WASP Deluxe** (4), **Edge** (5)
 and **Solina** (6), taken from their manuals' MIDI charts. These are analog: only the Crave has
 real CCs (attack, decay, sustain, glide, tempo); the others take notes, pitch bend and, on the
 Model D and Wasp, the mod wheel. Set each synth and its HW Instrument device to the profile's
 channel (or change the channel in your own copy). Your own TOML files go in
 `~/.config/bitwig-mcp-rs/instruments/` and replace a built-in profile of the same name
-(format in `src/hardware.rs`). SysEx (Model D / Wasp settings) is not supported: use SynthTool.
+(format in the `synthazia-hardware` docs).
+
+SysEx can't travel through a track. For SysEx parameters (all Model D and Wasp settings: MIDI
+channel, key priority, bend range, mod curve, …) and the raw `send_sysex` tool, assign the
+synth's MIDI port as the **MIDI output of the MCP bridge controller** in Bitwig's settings.
+`play_notes` takes an `instrument` to resolve its named keys (`"kick"` from a drum map).
 
 ### Limits
 
@@ -119,7 +125,7 @@ crates/bitwig-mcp-rs/   the server
   src/bridge/           protocol (wire types, framing), client (TCP), project (name
                         resolution), server (MCP tools, resources, prompts)
   src/osc/              DrivenByMoss backend
-  src/music.rs …        pure helpers: dB, note names, note grid, hardware profiles
+  src/music.rs …        pure helpers: dB, note names, note grid
   tests/                end-to-end over real stdio; live.rs against Bitwig (ignored)
 bitwig-bridge/          the Bitwig extension (Java 17, no dependencies, built by
                         scripts/bridge.nu) + protocol.schema.json

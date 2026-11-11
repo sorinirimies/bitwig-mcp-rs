@@ -32,7 +32,7 @@ use super::protocol::{
     SceneAction, SendLevel, TrackAction, TrackAddr, TrackChange, TrackKind, TransportAction,
     TransportChange,
 };
-use crate::hardware::{self, Profile};
+use crate::hardware::{self, MidiMessage, Profile, Registry};
 use crate::music;
 
 type ToolResult = Result<String, McpError>;
@@ -114,6 +114,33 @@ impl NoteRef {
             Self::Number(n) => Err(bad(format!("note {n} is above 127"))),
             Self::Name(s) => music::parse_note(s).map_err(bad),
         }
+    }
+}
+
+/// Parses hex SysEx (`"F0 00 20 32 F7"`, spaces optional) and checks the `F0 … F7` frame.
+///
+/// # Errors
+/// Bad hex, a missing frame, data bytes above 7F, or more than 4096 bytes.
+pub fn parse_sysex(hex: &str) -> Result<Vec<u8>, String> {
+    let digits: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
+    if !digits.len().is_multiple_of(2) {
+        return Err("SysEx hex needs two digits per byte".into());
+    }
+    let bytes = (0..digits.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&digits[i..i + 2], 16)
+                .map_err(|_| format!("bad hex byte {:?}", &digits[i..i + 2]))
+        })
+        .collect::<Result<Vec<u8>, _>>()?;
+    match bytes.as_slice() {
+        [0xF0, inner @ .., 0xF7] if !inner.is_empty() && inner.len() < 4096 => {
+            if inner.iter().any(|b| *b > 0x7F) {
+                return Err("SysEx data bytes must be 00-7F".into());
+            }
+            Ok(bytes)
+        }
+        _ => Err("SysEx must start with F0, end with F7 and hold 1-4095 data bytes".into()),
     }
 }
 
@@ -471,8 +498,11 @@ pub struct DeviceActionArgs {
 pub struct PlayNotesArgs {
     /// Track name or 1-based number (a HW Instrument track plays the hardware synth).
     pub track: Ref,
-    /// Notes (numbers or names); several = a chord.
+    /// Notes (numbers, names like "C3", or the instrument's named keys like "kick"); several =
+    /// a chord.
     pub notes: Vec<NoteRef>,
+    /// Instrument profile whose named keys (drum map) the notes may use.
+    pub instrument: Option<String>,
     /// Velocity 1-127 (default 100).
     pub velocity: Option<u8>,
     /// Hold time in ms (default 500, max 10000).
@@ -497,14 +527,23 @@ pub struct HardwareSetArgs {
     pub instrument: Option<String>,
     /// Parameter name from the profile, e.g. "cutoff".
     pub param: String,
-    /// Value 0.0-1.0.
+    /// Value 0.0-1.0 over the parameter's range.
     pub value: Option<f64>,
-    /// Raw MIDI value instead (0-127, or 0-16383 for 14-bit parameters).
+    /// Bipolar value -1.0..1.0 instead (0 = center), for centered parameters.
+    pub bipolar: Option<f64>,
+    /// Raw MIDI value instead, within the parameter's range.
     pub raw: Option<u16>,
     /// Named step instead, for parameters with named values.
     pub named: Option<String>,
     /// MIDI channel 1-16; default: the profile's.
     pub channel: Option<u8>,
+}
+
+/// A raw SysEx message.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SendSysexArgs {
+    /// Hex bytes, e.g. "F0 00 20 32 00 7F 0A 03 00 0C F7".
+    pub hex: String,
 }
 
 /// A program change.
@@ -633,8 +672,52 @@ impl BridgeServer {
         Ok((v, t))
     }
 
-    fn profiles(&self) -> (Vec<Profile>, Vec<String>) {
-        hardware::load_dir(&self.profiles_dir)
+    fn profiles(&self) -> Registry {
+        let mut r = Registry::with_builtin();
+        r.load_dir(&self.profiles_dir);
+        r
+    }
+
+    fn profile<'a>(reg: &'a Registry, name: &str) -> Result<&'a Profile, McpError> {
+        reg.get(name).ok_or_else(|| {
+            bad(format!(
+                "no instrument profile {name:?}; have {:?}",
+                reg.names()
+            ))
+        })
+    }
+
+    /// Sends profile messages in order: channel messages into the track, SysEx through the
+    /// extension's MIDI output.
+    async fn send_messages(
+        &self,
+        track: TrackAddr,
+        messages: &[MidiMessage],
+    ) -> Result<(), McpError> {
+        let mut batch: Vec<[u8; 3]> = Vec::new();
+        for m in messages {
+            match m {
+                MidiMessage::Sysex(bytes) => {
+                    if !batch.is_empty() {
+                        let messages = std::mem::take(&mut batch);
+                        self.call(Command::SendMidi { track, messages }).await?;
+                    }
+                    self.call(Command::SendSysex {
+                        bytes: bytes.clone(),
+                    })
+                    .await?;
+                }
+                other => batch.extend(other.as_channel()),
+            }
+        }
+        if !batch.is_empty() {
+            self.call(Command::SendMidi {
+                track,
+                messages: batch,
+            })
+            .await?;
+        }
+        Ok(())
     }
 
     fn grid_notes(notes: &[NoteArg]) -> Result<(f64, Vec<GridNote>, bool), McpError> {
@@ -1274,10 +1357,21 @@ impl BridgeServer {
         if velocity == 0 || velocity > 127 {
             return Err(bad("velocity must be 1-127"));
         }
+        let reg = a.instrument.as_ref().map(|_| self.profiles());
+        let profile = match (&reg, a.instrument.as_deref()) {
+            (Some(reg), Some(name)) => Some(Self::profile(reg, name)?),
+            _ => None,
+        };
         let keys = a
             .notes
             .iter()
-            .map(NoteRef::key)
+            .map(|n| match (n, profile) {
+                (NoteRef::Name(name), Some(p)) => match p.key(name) {
+                    Some(k) => Ok(k),
+                    None => n.key(),
+                },
+                _ => n.key(),
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let (_, track) = self.track_of(&a.track).await?;
         let duration_ms = a.duration_ms.unwrap_or(500).min(10_000);
@@ -1316,60 +1410,39 @@ impl BridgeServer {
     }
 
     #[tool(
-        description = "Hardware instrument profiles (from ~/.config/bitwig-mcp-rs/instruments/*.toml plus the built-in 'generic' General MIDI one) and their parameters."
+        description = "Hardware instrument profiles: built-in ones (generic General MIDI with a GM drum map; Behringer Model D, Crave, CAT, Wasp, Edge, Solina) plus ~/.config/bitwig-mcp-rs/instruments/*.toml. Each lists its MIDI channel, what it can do over MIDI (notes), its named parameters (CC, NRPN, RPN, pitch bend, pressure, SysEx; with range and named values) and named keys."
     )]
     async fn list_instruments(&self) -> ToolResult {
-        let (profiles, errors) = self.profiles();
-        let list: Vec<Json> = profiles
-            .iter()
-            .map(|p| {
-                json!({
-                    "name": p.name,
-                    "channel": p.channel,
-                    "notes": p.notes,
-                    "params": p.params,
-                })
-            })
-            .collect();
+        let reg = self.profiles();
+        let errors: Vec<String> = reg.errors().iter().map(ToString::to_string).collect();
         out(&json!({
             "dir": self.profiles_dir.display().to_string(),
-            "instruments": list,
+            "instruments": reg.profiles(),
             "errors": errors,
         }))
     }
 
     #[tool(
-        description = "Set a named parameter of an external synth (from its instrument profile) by sending the mapped CC/NRPN through the track's HW Instrument device. Give value (0-1), raw, or named."
+        description = "Set a named parameter of an external synth from its instrument profile: CC/NRPN/RPN/pitch bend go through the track's HW Instrument device, SysEx (e.g. Model D settings) through the MIDI output assigned to the MCP bridge controller. Give value (0-1), bipolar (-1..1), raw, or named."
     )]
     async fn hardware_set(&self, Parameters(a): Parameters<HardwareSetArgs>) -> ToolResult {
-        let (profiles, _) = self.profiles();
-        let pname = a.instrument.as_deref().unwrap_or("generic");
-        let profile = hardware::find(&profiles, pname).ok_or_else(|| {
-            let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
-            bad(format!("no instrument profile {pname:?}; have {names:?}"))
-        })?;
-        let (name, param) = profile.param(&a.param).ok_or_else(|| {
-            let names: Vec<&String> = profile.params.keys().collect();
-            bad(format!(
-                "{} has no parameter {:?}; have {names:?}",
-                profile.name, a.param
-            ))
-        })?;
-        let value = match (a.value, a.raw, a.named) {
-            (Some(v), None, None) => hardware::Value::Normalized(v),
-            (None, Some(r), None) => hardware::Value::Raw(r),
-            (None, None, Some(n)) => hardware::Value::Named(n),
-            _ => return Err(bad("give exactly one of value, raw, named")),
+        let reg = self.profiles();
+        let profile = Self::profile(&reg, a.instrument.as_deref().unwrap_or("generic"))?;
+        let value = match (a.value, a.bipolar, a.raw, a.named) {
+            (Some(v), None, None, None) => hardware::Value::Normalized(v),
+            (None, Some(b), None, None) => hardware::Value::Bipolar(b),
+            (None, None, Some(r), None) => hardware::Value::Raw(r),
+            (None, None, None, Some(n)) => hardware::Value::Named(n),
+            _ => return Err(bad("give exactly one of value, bipolar, raw, named")),
         };
-        let channel = a.channel.unwrap_or(profile.channel);
-        let messages = param.messages(channel, &value).map_err(bad)?;
+        let messages = profile
+            .messages(&a.param, &value, a.channel)
+            .map_err(|e| bad(e.to_string()))?;
+        let name = profile.param(&a.param).map(|(n, _)| n.to_owned());
         let (_, track) = self.track_of(&a.track).await?;
-        self.call(Command::SendMidi {
-            track,
-            messages: messages.clone(),
-        })
-        .await?;
-        out(&json!({"instrument": profile.name, "param": name, "sent": messages}))
+        self.send_messages(track, &messages).await?;
+        let sent: Vec<String> = messages.iter().map(MidiMessage::hex).collect();
+        out(&json!({"instrument": profile.name, "param": name, "sent": sent}))
     }
 
     #[tool(
@@ -1381,14 +1454,19 @@ impl BridgeServer {
     ) -> ToolResult {
         let messages =
             hardware::program_change(a.channel.unwrap_or(1), a.program, a.bank_msb, a.bank_lsb)
-                .map_err(bad)?;
+                .map_err(|e| bad(e.to_string()))?;
         let (_, track) = self.track_of(&a.track).await?;
-        self.call(Command::SendMidi {
-            track,
-            messages: messages.clone(),
-        })
-        .await?;
-        out(&json!({"sent": messages}))
+        self.send_messages(track, &messages).await?;
+        let sent: Vec<String> = messages.iter().map(MidiMessage::hex).collect();
+        out(&json!({"sent": sent}))
+    }
+
+    #[tool(
+        description = "Send a raw SysEx message (hex, F0 ... F7) through the MIDI output assigned to the MCP bridge controller in Bitwig's settings, e.g. synth settings or patch requests."
+    )]
+    async fn send_sysex(&self, Parameters(a): Parameters<SendSysexArgs>) -> ToolResult {
+        let bytes = parse_sysex(&a.hex).map_err(bad)?;
+        out(&self.call(Command::SendSysex { bytes }).await?)
     }
 
     // ------------------------------------------------------------ application
@@ -1889,6 +1967,7 @@ mod tests {
             instrument: None,
             param: "cutoff".into(),
             value: Some(1.0),
+            bipolar: None,
             raw: None,
             named: None,
             channel: Some(2),
@@ -1898,6 +1977,78 @@ mod tests {
         let req = &sent(&log, "send_midi")[0];
         assert_eq!(req["messages"], json!([[0xB1, 74, 127]]));
         assert_eq!(req["track"]["index"], 1);
+    }
+
+    #[tokio::test]
+    async fn hardware_sysex_settings_go_through_the_midi_output() {
+        let (s, log) = rig().await;
+        let r = s
+            .hardware_set(Parameters(HardwareSetArgs {
+                track: Ref::Name("synth".into()),
+                instrument: Some("model d".into()),
+                param: "bend_range".into(),
+                value: None,
+                bipolar: None,
+                raw: Some(7),
+                named: None,
+                channel: None,
+            }))
+            .await
+            .expect("tool");
+        assert!(r.contains("F0 00 20 32 00 7F 0A 03 00 07 F7"), "{r}");
+        let req = &sent(&log, "send_sysex")[0];
+        assert_eq!(
+            req["bytes"],
+            json!([
+                0xF0, 0x00, 0x20, 0x32, 0x00, 0x7F, 0x0A, 0x03, 0x00, 0x07, 0xF7
+            ])
+        );
+        assert!(sent(&log, "send_midi").is_empty());
+    }
+
+    #[tokio::test]
+    async fn play_notes_resolves_named_keys() {
+        let (s, log) = rig().await;
+        s.play_notes(Parameters(PlayNotesArgs {
+            track: Ref::Number(1),
+            notes: vec![NoteRef::Name("kick".into()), NoteRef::Name("C3".into())],
+            instrument: Some("generic".into()),
+            velocity: None,
+            duration_ms: Some(10),
+        }))
+        .await
+        .expect("tool");
+        assert_eq!(sent(&log, "play_notes")[0]["keys"], json!([36, 60]));
+    }
+
+    #[tokio::test]
+    async fn send_sysex_checks_the_frame() {
+        let (s, log) = rig().await;
+        s.send_sysex(Parameters(SendSysexArgs {
+            hex: "f0 7d 01 f7".into(),
+        }))
+        .await
+        .expect("tool");
+        assert_eq!(
+            sent(&log, "send_sysex")[0]["bytes"],
+            json!([0xF0, 0x7D, 1, 0xF7])
+        );
+        assert!(
+            s.send_sysex(Parameters(SendSysexArgs {
+                hex: "90 3C 7F".into()
+            }))
+            .await
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn sysex_parsing() {
+        assert_eq!(parse_sysex("F07D01F7"), Ok(vec![0xF0, 0x7D, 1, 0xF7]));
+        assert!(parse_sysex("F0 F7").is_err(), "empty");
+        assert!(parse_sysex("F0 80 F7").is_err(), "data above 7F");
+        assert!(parse_sysex("F0 7").is_err(), "odd digits");
+        assert!(parse_sysex("F0 ZZ F7").is_err(), "not hex");
     }
 
     #[tokio::test]

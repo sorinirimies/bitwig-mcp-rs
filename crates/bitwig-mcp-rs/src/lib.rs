@@ -10,7 +10,8 @@
 
 pub mod bridge;
 pub mod config;
-pub mod hardware;
+/// Hardware synth profiles: the [`synthazia_hardware`] crate, shared with the Synthazia DAW.
+pub use synthazia_hardware as hardware;
 pub mod midi;
 pub mod music;
 pub mod osc;

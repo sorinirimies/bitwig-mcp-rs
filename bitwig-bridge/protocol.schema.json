@@ -1381,6 +1381,30 @@
         "type": "object"
       },
       {
+        "description": "Send a SysEx message through the extension's MIDI output port (Track MIDI cannot carry\nSysEx). Nothing is sent when no port is assigned to the controller.",
+        "properties": {
+          "bytes": {
+            "description": "The complete message, `F0 … F7`.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "cmd": {
+            "const": "send_sysex",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      {
         "description": "List Bitwig application actions (menu commands) whose id or name contains `query`.",
         "properties": {
           "cmd": {

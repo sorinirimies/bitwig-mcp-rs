@@ -20,7 +20,8 @@ rosc = "0.11"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = { version = "1", default-features = false, features = ["parse", "serde"] }
+# Hardware synth profiles, shared with the Synthazia DAW (~/Projects/synthazia).
+synthazia-hardware = "0.0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

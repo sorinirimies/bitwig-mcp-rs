@@ -82,6 +82,7 @@ public class BridgeExtension extends ControllerExtension
    private IntegerValue cursorClipSlot;
    private PopupBrowser browser;
    private BrowserResultsItemBank results;
+   private com.bitwig.extension.controller.api.MidiOut sysexOut;
    private DeviceBank[] mainDevices;
    private DeviceBank[] fxDevices;
    private DeviceBank masterDevices;
@@ -197,6 +198,7 @@ public class BridgeExtension extends ControllerExtension
       });
 
       browser = host.createPopupBrowser();
+      sysexOut = host.getMidiOutPort(0);
       mark(browser.exists(), browser.contentTypeNames(), browser.selectedContentTypeIndex());
       results = browser.resultsColumn().createItemBank(RESULTS);
       mark(results.itemCount(), results.scrollPosition(), results.canScrollForwards());
@@ -498,6 +500,23 @@ public class BridgeExtension extends ControllerExtension
             }
             final Map<String, Object> res = new LinkedHashMap<>();
             res.put("sent", n);
+            r.ok(res);
+            return;
+         }
+         case "send_sysex":
+         {
+            final List<Object> raw = q.list("bytes");
+            final byte[] bytes = new byte[raw.size()];
+            for (int i = 0; i < bytes.length; i++)
+               bytes[i] = (byte) intOf(raw.get(i));
+            if (bytes.length < 3 || (bytes[0] & 0xFF) != 0xF0 || (bytes[bytes.length - 1] & 0xFF) != 0xF7)
+               throw new IllegalArgumentException("SysEx must start with F0 and end with F7");
+            if (sysexOut == null)
+               throw new IllegalArgumentException("no MIDI output: assign one to the MCP bridge controller");
+            sysexOut.sendSysex(bytes);
+            final Map<String, Object> res = new LinkedHashMap<>();
+            res.put("sent", bytes.length);
+            res.put("note", "sent to the MIDI output assigned to the MCP bridge controller");
             r.ok(res);
             return;
          }
