@@ -6,3 +6,8 @@
 /fuzz/artifacts/
 .DS_Store
 .codegraph/
+
+# Screenshots and other images never belong in the repo root (a desktop screenshot leaked once)
+/*.png
+/*.jpg
+/*.jpeg
