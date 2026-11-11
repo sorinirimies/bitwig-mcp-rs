@@ -152,7 +152,7 @@ impl Bridge {
             .map_err(|e| {
                 anyhow!(
                     "cannot reach the Bitwig bridge at {} ({e}). Is Bitwig running with the \
-                     'bitwig-mcp-rs bridge' controller added (Settings → Controllers)?",
+                     controller added (Settings → Controllers → bitwig-mcp-rs → MCP bridge)?",
                     self.addr
                 )
             })?;
