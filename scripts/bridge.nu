@@ -19,7 +19,7 @@
 use version.nu [cargo_version]
 
 export const API_VERSION = 25
-export const API_SHA256 = "842b1a05a1b29b17c4440cb3609c102953e3a0d28be910e743bce6aa2a38d1b6"
+export const API_SHA256 = "842b1a05a1b29b17c4440cb3609c102953e3a0d28be910e743bce6aa2a38d1b6" # gitleaks:allow (checksum of a public jar)
 export const ARTIFACT = "bitwig-mcp-rs.bwextension"
 const PKG = "io/github/sorinirimies/bitwigmcp"
 

@@ -1,0 +1,3 @@
+# False positives only; a real secret is rotated, never ignored.
+# sha256 of Bitwig's public extension-api jar (scripts/bridge.nu), not a key
+a35f1a4af9923e2b03f8806d05068655686c2536:scripts/bridge.nu:generic-api-key:20
