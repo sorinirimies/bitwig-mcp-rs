@@ -46,7 +46,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bitwig-mcp-rs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "rmcp",
@@ -54,8 +54,8 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "synthazia-hardware",
  "tokio",
- "toml",
  "tracing",
  "tracing-subscriber",
 ]
@@ -808,6 +808,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "synthazia-hardware"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4050190e7ebd50443eccb6d42263935c2fd5213d6eb00058c3ecce4861340291"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -916,6 +926,7 @@ dependencies = [
  "serde_spanned",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 
@@ -936,6 +947,12 @@ checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.2.0+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "tracing"

@@ -4,6 +4,20 @@ All notable changes to this project are documented here. It is generated from
 [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org) — do not edit it by hand.
 
+## [0.1.1](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.1.0...v0.1.1) — 2026-11-11
+
+### ✨ Features
+
+- **extension:** Bundle the Bitwig extension in the binary and install it ([`be913cf`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/be913cfc08c9fd71c37e2bb27d75f9f31bb01fbe))
+
+### 🐛 Bug fixes
+
+- **bridge:** Name the controller as Bitwig lists it in the connection error ([`8bc203d`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/8bc203d389f3184dcab0fbce1b6c53da15bffc78))
+
+### 🔄 CI and release
+
+- **secrets:** Ignore the extension API jar checksum, a gitleaks false positive ([`1d7f65f`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/1d7f65fc35c48c23fc3785a86cdabb91619cf35c))
+
 ## [0.1.0](https://github.com/sorinirimies/bitwig-mcp-rs/releases/tag/v0.1.0) — 2026-11-11
 
 ### ✨ Features

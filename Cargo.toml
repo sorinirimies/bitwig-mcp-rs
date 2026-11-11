@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 # One version for every crate; `just bump X.Y.Z` edits it (and EXTRA_MANIFESTS).
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
