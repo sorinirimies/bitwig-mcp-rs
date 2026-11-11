@@ -151,9 +151,9 @@ impl Bridge {
             .map_err(|_| anyhow!("timed out connecting to {}", self.addr))?
             .map_err(|e| {
                 anyhow!(
-                    "cannot reach the Bitwig bridge at {} ({e}). Is Bitwig running with the \
-                     controller added (Settings → Controllers → bitwig-mcp-rs → MCP bridge)?",
-                    self.addr
+                    "cannot reach the Bitwig bridge at {} ({e}). Is Bitwig running? {}",
+                    self.addr,
+                    crate::extension::ADD_CONTROLLER
                 )
             })?;
         stream.set_nodelay(true).ok();

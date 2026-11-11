@@ -17,7 +17,12 @@ struct Session {
 
 impl Session {
     fn start() -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_bitwig-mcp-rs"))
+        // BITWIG_MCP_BIN tests an installed binary (e.g. `cargo install bitwig-mcp-rs`)
+        // instead of this build: what a real user runs.
+        let bin = std::env::var("BITWIG_MCP_BIN")
+            .unwrap_or_else(|_| env!("CARGO_BIN_EXE_bitwig-mcp-rs").to_owned());
+        eprintln!("testing {bin}");
+        let mut child = Command::new(bin)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

@@ -138,3 +138,34 @@ fn osc_backend_speaks_mcp() {
         assert!(names.iter().any(|n| n == want), "missing {want}");
     }
 }
+
+#[test]
+fn install_extension_writes_the_bundled_extension() {
+    let dir = std::env::temp_dir().join(format!("bwmcp-cli-ext-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    let out = bin()
+        .args(["install-extension", "--dir"])
+        .arg(&dir)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("installed"), "{text}");
+    assert!(
+        text.contains("MCP bridge"),
+        "explains the controller step: {text}"
+    );
+    let jar = std::fs::read(dir.join("bitwig-mcp-rs.bwextension")).expect("written");
+    assert_eq!(&jar[..2], b"PK");
+    let again = bin()
+        .args(["install-extension", "--dir"])
+        .arg(&dir)
+        .output()
+        .expect("run");
+    assert!(String::from_utf8_lossy(&again.stdout).contains("current"));
+    std::fs::remove_dir_all(&dir).ok();
+}

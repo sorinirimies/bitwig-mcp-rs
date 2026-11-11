@@ -49,6 +49,10 @@ run *args:
 bridge-build:
     nu scripts/bridge.nu build
 
+# Rebuild the extension bundled into the binary (after changing bitwig-bridge/); commit it
+bridge-embed:
+    nu scripts/bridge.nu embed
+
 # Build and copy the extension into Bitwig's Extensions folder
 bridge-install:
     nu scripts/bridge.nu install

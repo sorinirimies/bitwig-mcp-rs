@@ -8,6 +8,12 @@ bitwig-mcp-rs - MCP server that controls Bitwig Studio
 
 Usage: bitwig-mcp-rs [OPTIONS]
   Speaks MCP on stdin/stdout. Logs go to stderr (RUST_LOG=debug for more).
+  At start it installs or updates the bundled Bitwig extension in Bitwig's Extensions
+  folder (when Bitwig's user folder exists); then add the controller once in Bitwig:
+  Settings -> Controllers -> + Add Controller -> bitwig-mcp-rs -> MCP bridge.
+
+       bitwig-mcp-rs install-extension [--dir <DIR>]
+  Installs the bundled Bitwig extension now (default: Bitwig's Extensions folder).
 
 Options (each also reads the environment variable in brackets):
       --backend <B>          bridge (our extension) or osc     [BITWIG_BACKEND, bridge]
@@ -15,6 +21,8 @@ Options (each also reads the environment variable in brackets):
       --bridge-port <PORT>   Bridge extension TCP port         [BITWIG_BRIDGE_PORT, 8417]
       --instruments-dir <D>  Hardware instrument profiles      [BITWIG_INSTRUMENTS_DIR,
                                                   ~/.config/bitwig-mcp-rs/instruments]
+      --no-install-extension Leave Bitwig's Extensions folder alone
+                                                  [BITWIG_NO_INSTALL_EXTENSION]
   OSC backend (DrivenByMoss):
       --send-port <PORT>     Port Bitwig listens on            [BITWIG_SEND_PORT, 8000]
       --listen-port <PORT>   Port Bitwig sends to (we bind)    [BITWIG_LISTEN_PORT, 9000]
@@ -41,6 +49,10 @@ pub struct Config {
     pub bridge_port: u16,
     /// Hardware instrument profile directory.
     pub instruments_dir: std::path::PathBuf,
+    /// Bitwig's user folder (`~/Bitwig Studio` on Linux), when the home directory is known.
+    pub bitwig_dir: Option<std::path::PathBuf>,
+    /// Install or update the bundled extension at start.
+    pub install_extension: bool,
     /// Host running Bitwig.
     pub host: String,
     /// UDP port Bitwig receives commands on.
@@ -59,6 +71,8 @@ impl Default for Config {
             backend: Backend::Bridge,
             bridge_port: 8417,
             instruments_dir: std::path::PathBuf::from("instruments"),
+            bitwig_dir: None,
+            install_extension: true,
             host: "127.0.0.1".into(),
             send_port: 8000,
             listen_port: 9000,
@@ -77,6 +91,8 @@ pub enum Cli {
     Help,
     /// Print the version.
     Version,
+    /// Install the bundled Bitwig extension into this folder, then exit.
+    InstallExtension(Option<std::path::PathBuf>),
 }
 
 /// A bad flag or value.
@@ -120,6 +136,12 @@ impl Config {
     {
         let mut cfg = Self::default();
         let home = env("HOME").or_else(|| env("USERPROFILE"));
+        cfg.bitwig_dir = home.as_deref().and_then(|h| {
+            crate::extension::bitwig_dir(std::env::consts::OS, std::path::Path::new(h))
+        });
+        if env("BITWIG_NO_INSTALL_EXTENSION").is_some_and(|v| !v.is_empty() && v != "0") {
+            cfg.install_extension = false;
+        }
         let config_home = env("XDG_CONFIG_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|| home.map(|h| std::path::Path::new(&h).join(".config")));
@@ -151,7 +173,17 @@ impl Config {
             cfg.bank_size = number("BITWIG_BANK_SIZE", &v)?;
         }
 
-        let mut it = args.into_iter();
+        let mut it = args.into_iter().peekable();
+        if it.peek().is_some_and(|a| a == "install-extension") {
+            it.next();
+            return match (it.next().as_deref(), it.next(), it.next()) {
+                (None, _, _) => Ok(Cli::InstallExtension(None)),
+                (Some("--dir"), Some(d), None) => Ok(Cli::InstallExtension(Some(d.into()))),
+                _ => Err(UsageError(
+                    "usage: bitwig-mcp-rs install-extension [--dir <DIR>]".into(),
+                )),
+            };
+        }
         while let Some(flag) = it.next() {
             if matches!(flag.as_str(), "-h" | "--help") {
                 return Ok(Cli::Help);
@@ -168,6 +200,7 @@ impl Config {
                 "--backend" => cfg.backend = backend(&value()?)?,
                 "--bridge-port" => cfg.bridge_port = number(&flag, &value()?)?,
                 "--instruments-dir" => cfg.instruments_dir = value()?.into(),
+                "--no-install-extension" => cfg.install_extension = false,
                 "--send-port" => cfg.send_port = number(&flag, &value()?)?,
                 "--listen-port" => cfg.listen_port = number(&flag, &value()?)?,
                 "--resolution" => cfg.resolution = number(&flag, &value()?)?,
@@ -264,6 +297,37 @@ mod tests {
             panic!("expected Run, got {cli:?}")
         };
         assert_eq!(cfg.host, "10.0.0.2");
+    }
+
+    #[test]
+    fn install_extension_subcommand() {
+        assert_eq!(
+            parse(&["install-extension"]),
+            Ok(Cli::InstallExtension(None))
+        );
+        assert_eq!(
+            parse(&["install-extension", "--dir", "/x"]),
+            Ok(Cli::InstallExtension(Some("/x".into())))
+        );
+        assert!(parse(&["install-extension", "--dir"]).is_err());
+        assert!(parse(&["install-extension", "extra"]).is_err());
+    }
+
+    #[test]
+    fn extension_install_can_be_switched_off() {
+        let Ok(Cli::Run(c)) = parse(&["--no-install-extension"]) else {
+            panic!()
+        };
+        assert!(!c.install_extension);
+        let env = |k: &str| (k == "BITWIG_NO_INSTALL_EXTENSION").then(|| "1".to_owned());
+        let Ok(Cli::Run(c)) = Config::parse(Vec::new(), env) else {
+            panic!()
+        };
+        assert!(!c.install_extension);
+        let Ok(Cli::Run(c)) = parse(&[]) else {
+            panic!()
+        };
+        assert!(c.install_extension);
     }
 
     #[test]

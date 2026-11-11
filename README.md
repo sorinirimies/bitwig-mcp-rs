@@ -32,15 +32,18 @@ Two backends:
 | Devices | load by name/preset/CLAP/VST3, every remote-control page | browser stepping |
 | Tools | ~30, names or numbers, dB, replies with Bitwig's state | ~100 low-level |
 
-### 1. Install the bridge extension
+### 1. Install
 
 ```sh
-just bridge-install     # needs a JDK (17+); builds target/bridge/bitwig-mcp-rs.bwextension
+cargo install bitwig-mcp-rs          # or a binary from the GitHub releases
+bitwig-mcp-rs install-extension      # optional: the server also does this at start
 ```
 
-copies it into `~/Bitwig Studio/Extensions` (Linux) or `~/Documents/Bitwig Studio/Extensions`
-(macOS, Windows). Then in Bitwig: *Settings → Controllers → Add controller →
-bitwig-mcp-rs → MCP bridge*. It listens on TCP port 8417 (changeable in the controller's
+The Bitwig extension is bundled in the binary. `install-extension` (or the server at start,
+unless `--no-install-extension`) writes it into `~/Bitwig Studio/Extensions` (Linux) or
+`~/Documents/Bitwig Studio/Extensions` (macOS, Windows) and keeps it current. Then, once,
+in Bitwig: *Settings → Controllers → + Add Controller → bitwig-mcp-rs → MCP bridge* (restart
+Bitwig if it is not listed yet). It listens on TCP port 8417 (changeable in the controller's
 settings).
 
 ### 2. Add the server to your MCP client
@@ -109,6 +112,7 @@ Not affiliated with Bitwig GmbH.
 ```sh
 just              # list tasks
 just bridge-install   # build + install the Bitwig extension (JDK 17+)
+just bridge-embed     # after changing bitwig-bridge/: rebuild the bundled extension (gate checks it)
 just test-live    # end-to-end against a running Bitwig with the bridge added
 just check-all    # the quality gate: fmt, clippy, tests, versions, nu tests
 just fuzz-all     # every cargo-fuzz target (nightly)

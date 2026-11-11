@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use bitwig_mcp_rs::bridge::client::Bridge;
 use bitwig_mcp_rs::bridge::server::BridgeServer;
 use bitwig_mcp_rs::config::{Backend, Cli, Config, HELP};
+use bitwig_mcp_rs::extension;
 use bitwig_mcp_rs::osc::client::Bitwig;
 use bitwig_mcp_rs::osc::server::OscServer;
 use rmcp::{ServiceExt, transport::stdio};
@@ -16,6 +17,7 @@ async fn main() -> ExitCode {
             println!("{HELP}");
             ExitCode::SUCCESS
         }
+        Ok(Cli::InstallExtension(dir)) => install_extension(dir),
         Ok(Cli::Version) => {
             println!("bitwig-mcp-rs {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -51,7 +53,49 @@ async fn run(cfg: Config) -> Result<()> {
     }
 }
 
+/// `bitwig-mcp-rs install-extension`: install into `dir` or Bitwig's Extensions folder.
+fn install_extension(dir: Option<std::path::PathBuf>) -> ExitCode {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    let dir = dir.or_else(|| {
+        home.and_then(|h| extension::bitwig_dir(std::env::consts::OS, std::path::Path::new(&h)))
+            .map(|b| b.join("Extensions"))
+    });
+    let Some(dir) = dir else {
+        eprintln!("error: cannot find Bitwig's user folder; pass --dir <Extensions folder>");
+        return ExitCode::FAILURE;
+    };
+    match extension::install(&dir, extension::BWEXTENSION) {
+        Ok(outcome) => {
+            println!("{outcome}");
+            println!("{}", extension::ADD_CONTROLLER);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// At start: keep the installed extension in step with this binary, if Bitwig is set up
+/// for this user (its user folder exists). Never fatal.
+fn ensure_extension(cfg: &Config) {
+    if !cfg.install_extension {
+        return;
+    }
+    let Some(bitwig) = cfg.bitwig_dir.as_ref().filter(|d| d.is_dir()) else {
+        tracing::info!("no Bitwig user folder found: not installing the extension");
+        return;
+    };
+    match extension::install(&bitwig.join("Extensions"), extension::BWEXTENSION) {
+        Ok(extension::Outcome::Current(_)) => tracing::debug!("the Bitwig extension is current"),
+        Ok(outcome) => tracing::info!("{outcome}. {}", extension::ADD_CONTROLLER),
+        Err(e) => tracing::warn!("could not install the Bitwig extension: {e}"),
+    }
+}
+
 async fn run_bridge(cfg: &Config) -> Result<()> {
+    ensure_extension(cfg);
     let bridge = Arc::new(Bridge::new(&cfg.host, cfg.bridge_port));
     tracing::info!(
         bridge = bridge.addr(),

@@ -14,6 +14,8 @@
 #   nu scripts/bridge.nu check      # build + test (quality gate); without javac: skipped
 #                                   # locally, an error in CI
 #   nu scripts/bridge.nu package --out dist   # release asset + .sha256
+#   nu scripts/bridge.nu embed      # build → crates/bitwig-mcp-rs/extension/ (bundled into
+#                                   # the binary; the gate fails when it is stale)
 # ──────────────────────────────────────────────────────────────────────────────
 
 use version.nu [cargo_version]
@@ -21,11 +23,26 @@ use version.nu [cargo_version]
 export const API_VERSION = 25
 export const API_SHA256 = "842b1a05a1b29b17c4440cb3609c102953e3a0d28be910e743bce6aa2a38d1b6" # gitleaks:allow (checksum of a public jar)
 export const ARTIFACT = "bitwig-mcp-rs.bwextension"
+export const EMBEDDED = "crates/bitwig-mcp-rs/extension/bitwig-mcp-rs.bwextension"
+export const STAMP = "META-INF/bitwig-mcp-rs.sources.sha256"
 const PKG = "io/github/sorinirimies/bitwigmcp"
 
 # Maven URL of Bitwig's extension API jar.
 export def api_url [version: int]: nothing -> string {
     $"https://maven.bitwig.com/com/bitwig/extension-api/($version)/extension-api-($version).jar"
+}
+
+# Hash of the extension's sources: relative path and content of every file, sorted by path.
+export def sources_hash [files: list<record<path: string, content: string>>]: nothing -> string {
+    $files | sort-by path | each {|f| $"($f.path)\n($f.content)\n" } | str join "" | hash sha256
+}
+
+# The extension's source files, relative to the repo root.
+def source_files [r: string]: nothing -> list<record<path: string, content: string>> {
+    let base = ($r | path join "bitwig-bridge")
+    (glob ($base | path join "src" "**" "*")) ++ (glob ($base | path join "resources" "**" "*"))
+    | where {|f| ($f | path type) == "file" }
+    | each {|f| {path: ($f | path relative-to $r), content: (open --raw $f | decode utf-8)} }
 }
 
 # File name of the release asset for a version.
@@ -106,9 +123,10 @@ def "main build" []: nothing -> nothing {
     let jar = (api_jar)
     ^javac --release 17 -Xlint:all -Werror -encoding UTF-8 -cp $jar -d $classes ...$sources
     cp -r ($r | path join "bitwig-bridge" "resources" "META-INF") $classes
+    sources_hash (source_files $r) | save --force ($classes | path join $STAMP)
     let artifact = ($out | path join $ARTIFACT)
     rm -f $artifact
-    ^jar --create --file $artifact -C $classes .
+    ^jar --create --date=2026-01-01T00:00:00Z --file $artifact -C $classes .
     print -e $"✅ built ($artifact) \(v($version), protocol ($protocol)\)"
     print $"artifact=($artifact)"
 }
@@ -126,14 +144,42 @@ def "main test" []: nothing -> nothing {
     ^java -ea -cp $out io.github.sorinirimies.bitwigmcp.JsonTest
 }
 
-def "main package" [--out: path = "dist"]: nothing -> nothing {
+# The sources hash stamped into a built extension.
+def jar_stamp [jar: string]: nothing -> string {
+    let tmp = (mktemp -d)
+    do { cd $tmp; ^jar --extract --file $jar $STAMP }
+    let stamp = (open --raw ($tmp | path join $STAMP) | decode utf-8 | str trim)
+    rm -rf $tmp
+    $stamp
+}
+
+def "main embed" []: nothing -> nothing {
     main build
+    let r = (root)
+    cp ($r | path join "target" "bridge" $ARTIFACT) ($r | path join $EMBEDDED)
+    print -e $"✅ embedded into ($EMBEDDED); commit it with the Java change"
+}
+
+# Fails when the embedded extension was not rebuilt after a change to bitwig-bridge/.
+def "main check-embedded" []: nothing -> nothing {
+    let r = (root)
+    let want = (sources_hash (source_files $r))
+    let have = (jar_stamp ($r | path join $EMBEDDED | path expand))
+    if $have != $want {
+        error make {msg: "the embedded Bitwig extension is stale: run `just bridge-embed` and commit it"}
+    }
+    print -e "✅ the embedded extension matches bitwig-bridge/"
+}
+
+# The release asset is the embedded extension: what `cargo install` users get too.
+def "main package" [--out: path = "dist"]: nothing -> nothing {
+    main check-embedded
     let r = (root)
     let version = (cargo_version (open ($r | path join "Cargo.toml")))
     mkdir $out
     let asset = (asset_name $version)
     let dest = ($out | path join $asset)
-    cp ($r | path join "target" "bridge" $ARTIFACT) $dest
+    cp ($r | path join $EMBEDDED) $dest
     let sum = (open --raw $dest | hash sha256)
     $"($sum)  ($asset)\n" | save --force $"($dest).sha256"
     print -e $"📦 ($dest)"
@@ -160,6 +206,7 @@ def "main check" []: nothing -> nothing {
     }
     main build
     main test
+    main check-embedded
 }
 
 def main [] {

@@ -3,7 +3,7 @@
 
 use std/assert
 use runner.nu *
-use ../bridge.nu [api_url extensions_dir build_info schema_protocol asset_name missing_javac API_VERSION API_SHA256]
+use ../bridge.nu [api_url extensions_dir build_info schema_protocol asset_name missing_javac sources_hash API_VERSION API_SHA256]
 
 def "test bridge: api url points at the Bitwig maven" [] {
     assert equal (api_url 25) "https://maven.bitwig.com/com/bitwig/extension-api/25/extension-api-25.jar"
@@ -41,6 +41,15 @@ def "test bridge: release asset name carries the version" [] {
 def "test bridge: CI fails without javac, developers skip" [] {
     assert equal (missing_javac true) "fail"
     assert equal (missing_javac false) "skip"
+}
+
+def "test bridge: the sources hash depends on paths and contents, not order" [] {
+    let a = [{path: "a.java", content: "x"} {path: "b.java", content: "y"}]
+    let b = [{path: "b.java", content: "y"} {path: "a.java", content: "x"}]
+    assert equal (sources_hash $a) (sources_hash $b)
+    assert not equal (sources_hash $a) (sources_hash [{path: "a.java", content: "z"} {path: "b.java", content: "y"}])
+    assert not equal (sources_hash $a) (sources_hash [{path: "c.java", content: "x"} {path: "b.java", content: "y"}])
+    assert equal (sources_hash $a | str length) 64
 }
 
 def main [] { run-tests }
