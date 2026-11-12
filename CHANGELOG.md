@@ -4,11 +4,46 @@ All notable changes to this project are documented here. It is generated from
 [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org) — do not edit it by hand.
 
+## [0.1.2](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.1.1...v0.1.2) — 2026-11-12
+
+### ✨ Features
+
+- **sound:** Build_drum_kit, list_devices and a guide to Bitwig's devices ([`a5f3baa`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/a5f3baae447b413bd320799a72679fee88ba1f26))
+- **export:** MIDI files, audio capture with loudness, save and export dialogs ([`3d7e47c`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/3d7e47c2ff7e27e43e00153aee26ae4fcac361b6))
+- **hardware:** Synthazia-hardware 0.0.4 with the Behringer 2600 profile ([`43a2345`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/43a23452ae15fbe1f44f2f49769ad7a56e0afdd7))
+- **compose:** Music theory and composing tools, record_clip, song plan ([`b7a7460`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/b7a746039a86f55c1c24b7b5a91ba382fc6ff979))
+
+### 🐛 Bug fixes
+
+- Sends in dB, presets by name, fresh names, full device lists, kit result ([`ceedf80`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/ceedf806edcdfa0c05c5f1236c353c8ccdc86cf7))
+- **server:** One tool call at a time; Bitwig 6 preset tab ([`858afc5`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/858afc5f0f21dc5e3a1e1029731269b185942043))
+- **drums:** Pads land on their key; list_devices stays small ([`b29e703`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/b29e7034ff7073339ef358425e31a724e23831c2))
+- **browser:** Reset filters before searching; list devices on a normal track ([`10d7155`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/10d7155204762aea68385d849cab1902d6a27341))
+- **notes:** Read_notes keeps every note across clip and grid changes ([`7d988c7`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/7d988c7c8d8c9f4b1d819cba614ea8936157cca2))
+- **extension:** Own TCP server, real track lookup, values that apply ([`5432096`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/543209677c39feb36bf2db2d8c221139915c60a2))
+
+### 📚 Documentation
+
+- The 2600 profile in the README ([`04a946e`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/04a946eaeb67d12e50b0e95675bec995504916f1))
+
+### 📦 Dependencies
+
+- Nightly cargo update 2026-11-11 ([`e8d5477`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/e8d5477f28b377282b30cf323470909376ad0a35))
+
+### 🔄 CI and release
+
+- Bump workflow actions ([`d9f7400`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/d9f74007a628a8a90081ff93d2a086f568af0231))
+
+### 🔧 Chores
+
+- Align with the project rules ([`7bdf028`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/7bdf0283dcfb9429702621e5a98dd328637ad741))
+- Ignore images in the repo root ([`30dd268`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/30dd2680bfe3a2686c2a5f24e1e09f2d77cb9089))
+
 ## [0.1.1](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.1.0...v0.1.1) — 2026-11-11
 
 ### ✨ Features
 
-- **extension:** Bundle the Bitwig extension in the binary and install it ([`be913cf`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/be913cfc08c9fd71c37e2bb27d75f9f31bb01fbe))
+- **extension:** Bundle the Bitwig extension in the binary and install it ([`a045bba`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/a045bba3418005961fb6d48f529b4eb9f3a45022))
 
 ### 🐛 Bug fixes
 
