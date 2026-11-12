@@ -1405,6 +1405,37 @@
         "type": "object"
       },
       {
+        "description": "The song plan stored in the project (a JSON text; empty when none).",
+        "properties": {
+          "cmd": {
+            "const": "get_song_plan",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Store the song plan in the project (saved with it).",
+        "properties": {
+          "cmd": {
+            "const": "set_song_plan",
+            "type": "string"
+          },
+          "text": {
+            "description": "JSON text, at most 60000 characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd",
+          "text"
+        ],
+        "type": "object"
+      },
+      {
         "description": "List Bitwig application actions (menu commands) whose id or name contains `query`.",
         "properties": {
           "cmd": {

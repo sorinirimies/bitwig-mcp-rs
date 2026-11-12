@@ -16,3 +16,4 @@ pub use synthazia_hardware as hardware;
 pub mod midi;
 pub mod music;
 pub mod osc;
+pub mod theory;

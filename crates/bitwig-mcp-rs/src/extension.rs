@@ -16,8 +16,8 @@ pub const FILE_NAME: &str = "bitwig-mcp-rs.bwextension";
 
 /// The one manual step, for messages.
 pub const ADD_CONTROLLER: &str = "In Bitwig: Settings → Controllers → + Add Controller → \
-vendor \"bitwig-mcp-rs\", model \"MCP bridge\" (restart Bitwig if it is not listed yet). \
-Assign its MIDI output only if you want SysEx for hardware synths.";
+vendor \"bitwig-mcp-rs\", product \"MCP bridge\" (restart Bitwig if it is not listed or after \
+updating). Pick \"MCP bridge + SysEx out\" instead only to send SysEx to hardware synths.";
 
 /// Bitwig's user folder on an OS (`linux`, `macos`, `windows`), given the home directory.
 #[must_use]

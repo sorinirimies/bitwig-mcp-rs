@@ -34,6 +34,7 @@ use super::protocol::{
 };
 use crate::hardware::{self, MidiMessage, Profile, Registry};
 use crate::music;
+use crate::theory;
 
 type ToolResult = Result<String, McpError>;
 
@@ -622,6 +623,194 @@ pub struct HardwarePromptArgs {
     pub synth: String,
 }
 
+// ---------------------------------------------------------------- composing parameters
+
+/// Replace a clip's notes or add to them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteMode {
+    /// Clear the clip first.
+    #[default]
+    Replace,
+    /// Keep existing notes.
+    Add,
+}
+
+/// Where generated notes go.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct Target {
+    /// Track name or 1-based number.
+    pub track: Ref,
+    /// Slot: 1-based number or scene name. An empty slot gets a new clip.
+    pub slot: Ref,
+    /// Clip name.
+    pub name: Option<String>,
+    /// replace (default) or add.
+    pub mode: Option<WriteMode>,
+}
+
+/// Chords.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WriteChordsArgs {
+    /// Track, slot, clip name, mode.
+    #[serde(flatten)]
+    pub target: Target,
+    /// Key, e.g. "A minor", "F# dorian"; needed for Roman numerals.
+    pub key: Option<String>,
+    /// Chord symbols ("Am7 Fmaj7 C G") or Roman numerals in the key ("i VI III VII").
+    pub progression: String,
+    /// Beats each chord lasts (default 4 = one 4/4 bar).
+    pub beats_per_chord: Option<f64>,
+    /// Bitwig octave of the chord roots (default 3; C3 = 60).
+    pub octave: Option<i32>,
+    /// close (smooth voice leading, default), open, drop2 or root.
+    pub voicing: Option<theory::Voicing>,
+    /// Rhythm per chord as steps, e.g. "x..x..x." (x hit, X accent, . rest, _ tie); default:
+    /// held for the whole chord.
+    pub rhythm: Option<String>,
+    /// Step length of the rhythm: "1/16" (default), "1/8", "1/4", or beats.
+    pub step: Option<String>,
+    /// Velocity 1-127 (default 90).
+    pub velocity: Option<u8>,
+}
+
+/// Bassline.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WriteBasslineArgs {
+    /// Track, slot, clip name, mode.
+    #[serde(flatten)]
+    pub target: Target,
+    /// Key, e.g. "A minor"; needed for Roman numerals.
+    pub key: Option<String>,
+    /// Chords to follow, as symbols or Roman numerals.
+    pub progression: String,
+    /// Beats each chord lasts (default 4).
+    pub beats_per_chord: Option<f64>,
+    /// Bitwig octave (default 1; C1 = 36).
+    pub octave: Option<i32>,
+    /// root (default), octave, fifth, arpeggio or walking.
+    pub style: Option<theory::BassStyle>,
+    /// Hits per chord as steps (default "x.xx" in eighths).
+    pub rhythm: Option<String>,
+    /// Step length: "1/8" (default), "1/16", ...
+    pub step: Option<String>,
+    /// Velocity (default 100).
+    pub velocity: Option<u8>,
+}
+
+/// Arpeggio.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WriteArpArgs {
+    /// Track, slot, clip name, mode.
+    #[serde(flatten)]
+    pub target: Target,
+    /// Key; needed for Roman numerals.
+    pub key: Option<String>,
+    /// Chords to arpeggiate.
+    pub progression: String,
+    /// Beats each chord lasts (default 4).
+    pub beats_per_chord: Option<f64>,
+    /// Bitwig octave (default 3).
+    pub octave: Option<i32>,
+    /// up (default), down, up_down or random.
+    pub direction: Option<theory::ArpMode>,
+    /// Note length: "1/16" (default), "1/8", "1/8T"...
+    pub rate: Option<String>,
+    /// Octaves spanned (default 1, max 4).
+    pub octaves: Option<u8>,
+    /// Gate 0.05-1 of the rate (default 0.8).
+    pub gate: Option<f64>,
+    /// Velocity (default 90).
+    pub velocity: Option<u8>,
+    /// Seed for random (default 1).
+    pub seed: Option<u64>,
+}
+
+/// One Euclidean voice.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct EuclidArg {
+    /// Hits.
+    pub hits: usize,
+    /// Steps.
+    pub steps: usize,
+    /// Rotation (default 0).
+    pub rotate: Option<usize>,
+}
+
+/// Drums.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WriteDrumsArgs {
+    /// Track, slot, clip name, mode.
+    #[serde(flatten)]
+    pub target: Target,
+    /// Instrument profile whose named keys to use (default "generic": General MIDI drums,
+    /// which Bitwig's Drum Machine follows: kick, snare, clap, closed_hat, open_hat, ...).
+    pub instrument: Option<String>,
+    /// Voice → steps, e.g. {"kick": "x...x...x...x...", "closed_hat": "..x...x...x...x."}.
+    /// Voices are key names from the profile, note names ("C1") or numbers.
+    #[serde(default)]
+    pub patterns: std::collections::BTreeMap<String, String>,
+    /// Voice → Euclidean rhythm, e.g. {"rim": {"hits": 3, "steps": 8}}.
+    #[serde(default)]
+    pub euclid: std::collections::BTreeMap<String, EuclidArg>,
+    /// Step length: "1/16" (default), "1/8"...
+    pub step: Option<String>,
+    /// Clip length in beats (default 4).
+    pub length_beats: Option<f64>,
+    /// Velocity (default 100; X accents get +25).
+    pub velocity: Option<u8>,
+}
+
+/// Transform a clip.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TransformClipArgs {
+    /// Track name or 1-based number.
+    pub track: Ref,
+    /// Slot: 1-based number or scene name.
+    pub slot: Ref,
+    /// Operations in order, e.g. [{"op": "transpose", "semitones": 7},
+    /// {"op": "humanize", "timing": 0.02, "velocity": 8}].
+    pub ops: Vec<theory::Transform>,
+}
+
+/// Record into a slot.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RecordClipArgs {
+    /// Track to record on: an audio track whose input is the synth (or a mic), or an
+    /// instrument track for MIDI.
+    pub track: Ref,
+    /// Slot: 1-based number or scene name (should be empty).
+    pub slot: Ref,
+    /// Length in bars (1-64).
+    pub bars: u32,
+    /// After recording: play (default) or stop.
+    pub then: Option<String>,
+    /// Notes to play into it while recording (e.g. to capture a hardware synth): same format
+    /// as create_clip. Needs a HW Instrument on `play_on`.
+    #[serde(default)]
+    pub notes: Vec<NoteArg>,
+    /// Track that plays `notes` (e.g. the HW Instrument track of the synth being recorded).
+    pub play_on: Option<Ref>,
+}
+
+/// The song plan.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SongPlanArgs {
+    /// The plan as JSON: anything useful, e.g. {"title", "genre", "key", "tempo",
+    /// "sections": [{"name", "bars", "scene", "energy"}], "tracks": {"Bass": "role"},
+    /// "notes": [...]}. Replaces the stored plan.
+    pub plan: Json,
+}
+
+/// Prompt: compose.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ComposeArgs {
+    /// Idea, genre or mood, e.g. "dark techno at 130", "dreamy synthwave".
+    pub idea: String,
+    /// Hardware synths to use, e.g. "Model D for bass, 2600 for leads".
+    pub hardware: Option<String>,
+}
+
 // ---------------------------------------------------------------- the server
 
 /// The bridge-backed MCP server.
@@ -835,6 +1024,197 @@ fn pick(names: &[String], name: &str, what: &str) -> Result<u32, McpError> {
         })
         .ok_or_else(|| bad(format!("no unique {what} {name:?}; have {names:?}")))?;
     u32::try_from(idx).map_err(err)
+}
+
+/// The snapshot entry of a clip (Null when the slot is empty).
+fn track_clip(snapshot: &Json, track: TrackAddr, slot: u32) -> Json {
+    let list = match track.bank {
+        super::protocol::TrackBank::Main => &snapshot["tracks"],
+        super::protocol::TrackBank::Effect => &snapshot["effect_tracks"],
+        super::protocol::TrackBank::Master => return Json::Null,
+    };
+    list.as_array()
+        .and_then(|l| l.iter().find(|t| t["index"] == track.index))
+        .and_then(|t| t["clips"].as_array())
+        .and_then(|c| c.iter().find(|c| c["slot"] == slot))
+        .cloned()
+        .unwrap_or(Json::Null)
+}
+
+/// A step or rate like "1/16", "1/8T", "0.5" in beats.
+fn parse_step(text: Option<&str>, default: f64) -> Result<f64, McpError> {
+    let Some(t) = text.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Ok(default);
+    };
+    let (body, triplet) = match t.strip_suffix(['T', 't']) {
+        Some(b) => (b, true),
+        None => (t, false),
+    };
+    let beats = match body.split_once('/') {
+        // "1/16" of a whole note = 4/16 beats
+        Some((n, d)) => {
+            let n: f64 = n
+                .trim()
+                .parse()
+                .map_err(|_| bad(format!("bad step {t:?}")))?;
+            let d: f64 = d
+                .trim()
+                .parse()
+                .map_err(|_| bad(format!("bad step {t:?}")))?;
+            4.0 * n / d
+        }
+        None => body.parse().map_err(|_| bad(format!("bad step {t:?}")))?,
+    };
+    let beats = if triplet { beats * 2.0 / 3.0 } else { beats };
+    if !(beats.is_finite() && (1.0 / 64.0..=16.0).contains(&beats)) {
+        return Err(bad(format!("step {t:?} must be between 1/256 and 4 bars")));
+    }
+    Ok(beats)
+}
+
+fn chords_of(key: Option<&str>, progression: &str) -> Result<Vec<theory::Chord>, McpError> {
+    let scale = key.map(theory::Scale::parse).transpose().map_err(bad)?;
+    let chords = theory::progression(progression, scale.as_ref()).map_err(bad)?;
+    if chords.len() > 64 {
+        return Err(bad("at most 64 chords"));
+    }
+    Ok(chords)
+}
+
+fn beats_of(per_chord: Option<f64>) -> Result<f64, McpError> {
+    let b = per_chord.unwrap_or(4.0);
+    if !(b.is_finite() && (0.25..=64.0).contains(&b)) {
+        return Err(bad("beats_per_chord must be 0.25-64"));
+    }
+    Ok(b)
+}
+
+fn rhythm_of(text: Option<&str>) -> Result<Option<Vec<theory::Step>>, McpError> {
+    text.map(theory::steps).transpose().map_err(bad)
+}
+
+/// Resolves a drum voice: a key name of the profile, a note name or a number.
+fn voice_key(profile: Option<&Profile>, voice: &str) -> Result<u8, McpError> {
+    if let Some(k) = profile.and_then(|p| p.key(voice)) {
+        return Ok(k);
+    }
+    if let Ok(n) = voice.trim().parse::<u8>()
+        && n <= 127
+    {
+        return Ok(n);
+    }
+    music::parse_note(voice).map_err(|_| {
+        let names: Vec<&String> = profile.map(|p| p.keys.keys().collect()).unwrap_or_default();
+        bad(format!(
+            "unknown drum voice {voice:?}: use a key name {names:?}, a note name or a number"
+        ))
+    })
+}
+
+impl BridgeServer {
+    /// Writes generated notes into a slot: creates the clip when the slot is empty (length
+    /// rounded up to whole beats), else replaces or adds notes and sets the loop length.
+    async fn put_notes(
+        &self,
+        target: &Target,
+        notes: Vec<crate::midi::Note>,
+        length: f64,
+    ) -> ToolResult {
+        if notes.is_empty() {
+            return Err(bad("nothing to write: the pattern has no notes"));
+        }
+        if notes.len() > 4000 {
+            return Err(bad("more than 4000 notes; write fewer bars at a time"));
+        }
+        let (view, track) = self.track_of(&target.track).await?;
+        let slot = view.slot(&target.slot).map_err(bad)?;
+        let whole = length.ceil().clamp(1.0, 1024.0) as u32;
+        let existed = view.has_clip(track, slot);
+        if !existed {
+            self.call(Command::CreateClip {
+                track,
+                slot,
+                length: whole,
+            })
+            .await?;
+        }
+        let args: Vec<NoteArg> = notes
+            .iter()
+            .map(|n| NoteArg {
+                note: NoteRef::Number(n.note),
+                start: n.start_beats,
+                length: n.length_beats,
+                velocity: Some(n.velocity.clamp(1, 127)),
+            })
+            .collect();
+        let (step, grid, rounded) = Self::grid_notes(&args)?;
+        let replace = target.mode.unwrap_or_default() == WriteMode::Replace;
+        let written = self
+            .call(Command::WriteNotes {
+                track,
+                slot,
+                step,
+                clear: replace,
+                notes: grid,
+            })
+            .await?;
+        let change = ClipChange {
+            name: target.name.clone(),
+            loop_length: (existed && replace).then_some(length),
+            ..ClipChange::default()
+        };
+        if change.name.is_some() || change.loop_length.is_some() {
+            self.call(Command::SetClip {
+                track,
+                slot,
+                change,
+            })
+            .await?;
+        }
+        out(&json!({
+            "slot": slot + 1,
+            "notes_written": written["notes"].as_array().map_or(0, Vec::len),
+            "length_beats": length,
+            "new_clip": !existed,
+            "rounded_to_1_64": rounded,
+        }))
+    }
+
+    async fn read_clip_notes(
+        &self,
+        track: TrackAddr,
+        slot: u32,
+    ) -> Result<(Vec<crate::midi::Note>, f64), McpError> {
+        let coarse = self
+            .call(Command::ReadNotes {
+                track,
+                slot,
+                step: 0.25,
+            })
+            .await?;
+        let length = coarse["clip"]["loop_length"].as_f64().unwrap_or(4.0);
+        // finest grid that still covers the clip (4096 steps)
+        let step = if length <= 64.0 { 1.0 / 64.0 } else { 0.25 };
+        let r = if step == 0.25 {
+            coarse
+        } else {
+            self.call(Command::ReadNotes { track, slot, step }).await?
+        };
+        let notes = r["notes"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|n| crate::midi::Note {
+                        note: n["key"].as_u64().unwrap_or(0).min(127) as u8,
+                        start_beats: n["x"].as_f64().unwrap_or(0.0) * step,
+                        length_beats: n["duration"].as_f64().unwrap_or(0.25),
+                        velocity: n["velocity"].as_u64().unwrap_or(100).clamp(1, 127) as u8,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok((notes, length))
+    }
 }
 
 #[tool_router]
@@ -1539,10 +1919,310 @@ impl BridgeServer {
             })
             .await?)
     }
+
+    // ------------------------------------------------------------ composing
+
+    #[tool(
+        description = "Write a chord progression into a clip: chord symbols (\"Am7 Fmaj7 C G\") or Roman numerals in a key (key \"A minor\", \"i VI III VII\"), with voicing (close voice-leads smoothly), octave and an optional rhythm per chord (\"x..x..x.\"). An empty slot gets a new clip."
+    )]
+    async fn write_chords(&self, Parameters(a): Parameters<WriteChordsArgs>) -> ToolResult {
+        let chords = chords_of(a.key.as_deref(), &a.progression)?;
+        let per = beats_of(a.beats_per_chord)?;
+        let rhythm = rhythm_of(a.rhythm.as_deref())?;
+        let step = parse_step(a.step.as_deref(), 0.25)?;
+        let notes = theory::chord_notes(
+            &chords,
+            per,
+            a.octave.unwrap_or(3).clamp(-2, 8),
+            a.voicing.unwrap_or_default(),
+            rhythm.as_deref().map(|r| (r, step)),
+            a.velocity.unwrap_or(90),
+        );
+        self.put_notes(&a.target, notes, per * chords.len() as f64)
+            .await
+    }
+
+    #[tool(
+        description = "Write a bassline that follows a chord progression (symbols or Roman numerals in a key): style root, octave, fifth, arpeggio or walking; rhythm as steps (default \"x.xx\" in eighths); octave 1 by default."
+    )]
+    async fn write_bassline(&self, Parameters(a): Parameters<WriteBasslineArgs>) -> ToolResult {
+        let chords = chords_of(a.key.as_deref(), &a.progression)?;
+        let per = beats_of(a.beats_per_chord)?;
+        let rhythm = rhythm_of(a.rhythm.as_deref())?;
+        let step = parse_step(a.step.as_deref(), 0.5)?;
+        let notes = theory::bassline(
+            &chords,
+            per,
+            a.octave.unwrap_or(1).clamp(-2, 8),
+            a.style.unwrap_or_default(),
+            rhythm.as_deref().map(|r| (r, step)),
+            a.velocity.unwrap_or(100),
+        );
+        self.put_notes(&a.target, notes, per * chords.len() as f64)
+            .await
+    }
+
+    #[tool(
+        description = "Write an arpeggio over a chord progression: direction up, down, up_down or random (seeded), rate (\"1/16\", \"1/8T\"), octaves and gate."
+    )]
+    async fn write_arp(&self, Parameters(a): Parameters<WriteArpArgs>) -> ToolResult {
+        let chords = chords_of(a.key.as_deref(), &a.progression)?;
+        let per = beats_of(a.beats_per_chord)?;
+        let rate = parse_step(a.rate.as_deref(), 0.25)?;
+        let notes = theory::arpeggio(
+            &chords,
+            per,
+            a.octave.unwrap_or(3).clamp(-2, 8),
+            a.direction.unwrap_or_default(),
+            rate,
+            a.octaves.unwrap_or(1).clamp(1, 4),
+            a.gate.unwrap_or(0.8),
+            a.velocity.unwrap_or(90),
+            a.seed.unwrap_or(1),
+        );
+        self.put_notes(&a.target, notes, per * chords.len() as f64)
+            .await
+    }
+
+    #[tool(
+        description = "Write a drum pattern: per voice a step string (\"x...x...x...x...\", X = accent, _ = tie) and/or a Euclidean rhythm. Voices are named keys of an instrument profile (default General MIDI, which Bitwig's Drum Machine uses: kick, snare, clap, closed_hat, open_hat, low_tom, mid_tom, high_tom, crash, ride), note names or numbers."
+    )]
+    async fn write_drums(&self, Parameters(a): Parameters<WriteDrumsArgs>) -> ToolResult {
+        if a.patterns.is_empty() && a.euclid.is_empty() {
+            return Err(bad("give patterns and/or euclid"));
+        }
+        let registry = self.profiles();
+        let pname = a.instrument.as_deref().unwrap_or("generic");
+        let profile = registry
+            .get(pname)
+            .ok_or_else(|| bad(format!("no instrument profile {pname:?}")))?;
+        let step = parse_step(a.step.as_deref(), 0.25)?;
+        let length = a.length_beats.unwrap_or(4.0);
+        if !(length.is_finite() && (0.25..=256.0).contains(&length)) {
+            return Err(bad("length_beats must be 0.25-256"));
+        }
+        let mut voices = Vec::new();
+        for (voice, pattern) in &a.patterns {
+            voices.push((
+                voice_key(Some(profile), voice)?,
+                theory::steps(pattern).map_err(bad)?,
+            ));
+        }
+        for (voice, e) in &a.euclid {
+            if e.steps == 0 || e.steps > 64 {
+                return Err(bad("euclid steps must be 1-64"));
+            }
+            voices.push((
+                voice_key(Some(profile), voice)?,
+                theory::euclid(e.hits, e.steps, e.rotate.unwrap_or(0)),
+            ));
+        }
+        let notes = theory::drums(&voices, step, length, a.velocity.unwrap_or(100));
+        self.put_notes(&a.target, notes, length).await
+    }
+
+    #[tool(
+        description = "Transform the notes of a clip in place: transpose, to_scale (snap to a key), humanize (seeded timing/velocity), quantize, reverse, stretch (0.5 = double time, 2 = half time), velocity (scale/offset), thin. Ops run in order."
+    )]
+    async fn transform_clip(&self, Parameters(a): Parameters<TransformClipArgs>) -> ToolResult {
+        if a.ops.is_empty() {
+            return Err(bad("ops is empty"));
+        }
+        let (view, track) = self.track_of(&a.track).await?;
+        let slot = view.slot(&a.slot).map_err(bad)?;
+        if !view.has_clip(track, slot) {
+            return Err(bad(format!("slot {} has no clip", slot + 1)));
+        }
+        let (notes, length) = self.read_clip_notes(track, slot).await?;
+        if notes.is_empty() {
+            return Err(bad("the clip has no notes"));
+        }
+        let changed = theory::transform(&notes, &a.ops, length).map_err(bad)?;
+        let target = Target {
+            track: a.track,
+            slot: Ref::Number(slot + 1),
+            name: None,
+            mode: Some(WriteMode::Replace),
+        };
+        let r = self.put_notes(&target, changed, length).await?;
+        out(
+            &json!({"before": notes.len(), "result": serde_json::from_str::<Json>(&r).unwrap_or(Json::Null)}),
+        )
+    }
+
+    #[tool(
+        description = "Record a launcher clip for a number of bars at the project tempo, then play or stop it. For a hardware synth: record on an audio track whose input is the synth, and pass notes + play_on (its HW Instrument track) to play a part into the recording. The call returns when recording is done."
+    )]
+    async fn record_clip(&self, Parameters(a): Parameters<RecordClipArgs>) -> ToolResult {
+        if !(1..=64).contains(&a.bars) {
+            return Err(bad("bars must be 1-64"));
+        }
+        let then_play = match a.then.as_deref() {
+            None | Some("play") => true,
+            Some("stop") => false,
+            Some(o) => return Err(bad(format!("then must be play or stop, not {o:?}"))),
+        };
+        let (snap, view) = self.project().await?;
+        let track = view.track(&a.track).map_err(bad)?;
+        let slot = view.slot(&a.slot).map_err(bad)?;
+        if view.has_clip(track, slot) {
+            return Err(bad(format!("slot {} already holds a clip", slot + 1)));
+        }
+        let player = a
+            .play_on
+            .as_ref()
+            .map(|r| view.track(r))
+            .transpose()
+            .map_err(bad)?;
+        if !a.notes.is_empty() && player.is_none() {
+            return Err(bad("notes need play_on: the track that plays them"));
+        }
+        let tempo = snap["transport"]["tempo"]
+            .as_f64()
+            .unwrap_or(120.0)
+            .max(20.0);
+        let beats_per_bar = snap["transport"]["time_signature"]
+            .as_str()
+            .and_then(|s| s.split_once('/'))
+            .and_then(|(n, d)| {
+                Some(n.trim().parse::<f64>().ok()? * 4.0 / d.trim().parse::<f64>().ok()?)
+            })
+            .unwrap_or(4.0);
+        let beats = f64::from(a.bars) * beats_per_bar;
+        let seconds = beats * 60.0 / tempo;
+        let keys: Vec<(f64, f64, u8, u8)> = a
+            .notes
+            .iter()
+            .map(|n| Ok((n.start, n.length, n.note.key()?, n.velocity.unwrap_or(100))))
+            .collect::<Result<_, McpError>>()?;
+        self.call(Command::SetTrack {
+            track,
+            change: TrackChange {
+                arm: Some(true),
+                ..TrackChange::default()
+            },
+        })
+        .await?;
+        self.call(Command::ClipAction {
+            track,
+            slot,
+            action: ClipAction::Record,
+        })
+        .await?;
+        // wait for the launch quantization to start the recording
+        let started = std::time::Instant::now();
+        loop {
+            let p = self.call(Command::GetProject).await?;
+            if track_clip(&p, track, slot)["recording"] == true {
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(20) {
+                return Err(err(
+                    "recording did not start within 20 s (is the transport playing or the launch quantization long?)",
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let t0 = tokio::time::Instant::now();
+        if let Some(p) = player {
+            for (start, len, key, vel) in &keys {
+                let at = t0 + Duration::from_secs_f64((start * 60.0 / tempo).max(0.0));
+                tokio::time::sleep_until(at).await;
+                let ms = (len * 60_000.0 / tempo).clamp(10.0, 10_000.0) as u32;
+                let call = Command::PlayNotes {
+                    track: p,
+                    keys: vec![*key],
+                    velocity: *vel,
+                    duration_ms: ms,
+                };
+                let bridge = Arc::clone(&self.bridge);
+                tokio::spawn(async move { bridge.call(call).await });
+            }
+        }
+        tokio::time::sleep_until(t0 + Duration::from_secs_f64(seconds)).await;
+        let finish = if then_play {
+            ClipAction::Launch
+        } else {
+            ClipAction::Stop
+        };
+        self.call(Command::ClipAction {
+            track,
+            slot,
+            action: finish,
+        })
+        .await?;
+        self.call(Command::SetTrack {
+            track,
+            change: TrackChange {
+                arm: Some(false),
+                ..TrackChange::default()
+            },
+        })
+        .await?;
+        out(
+            &json!({"recorded_bars": a.bars, "seconds": seconds, "slot": slot + 1, "then": if then_play { "play" } else { "stop" }}),
+        )
+    }
+
+    // ------------------------------------------------------------ song plan
+
+    #[tool(
+        description = "The song plan stored in this Bitwig project: key, tempo, sections, track roles and ideas from earlier sessions. Read it before continuing a song."
+    )]
+    async fn get_song_plan(&self) -> ToolResult {
+        let r = self.call(Command::GetSongPlan).await?;
+        let text = r["text"].as_str().unwrap_or_default();
+        if text.trim().is_empty() {
+            return out(
+                &json!({"plan": null, "hint": "no plan yet: set_song_plan after deciding key, tempo and sections"}),
+            );
+        }
+        let plan: Json = serde_json::from_str(text).unwrap_or(Json::String(text.to_owned()));
+        out(&json!({"plan": plan}))
+    }
+
+    #[tool(
+        description = "Store the song plan (JSON) in the Bitwig project, so later sessions can continue the song: title, genre, key, tempo, sections with bars and scenes, track roles, decisions. Replaces the stored plan; saved with the project."
+    )]
+    async fn set_song_plan(&self, Parameters(a): Parameters<SongPlanArgs>) -> ToolResult {
+        let text = serde_json::to_string(&a.plan).map_err(err)?;
+        if text.chars().count() > 60_000 {
+            return Err(bad("the plan is limited to 60000 characters"));
+        }
+        out(&self.call(Command::SetSongPlan { text }).await?)
+    }
 }
 
 #[prompt_router]
 impl BridgeServer {
+    #[prompt(
+        description = "Compose a track step by step with the composing tools, asking the user at each stage. Keeps the song plan in the project."
+    )]
+    async fn compose_track(&self, Parameters(a): Parameters<ComposeArgs>) -> Vec<PromptMessage> {
+        let hardware = a
+            .hardware
+            .map(|h| format!("Hardware to use: {h}. Check list_instruments for their channels and what they can do; play them through HW Instrument tracks.\n"))
+            .unwrap_or_default();
+        vec![PromptMessage::new_text(
+            Role::User,
+            format!(
+                "Compose with me in Bitwig: {idea}.\n{hardware}\
+                 Work in stages and after each one tell me what you did and ask: keep, vary or redo?\n\
+                 0. get_song_plan: if a plan exists, continue it instead of starting over. get_project to see what exists; never delete my material.\n\
+                 1. Concept: pick key, tempo, time signature and 3-5 sections (e.g. intro 8 bars, build 8, drop 16, break 8, outro 8). set_transport tempo, then set_song_plan with all of it.\n\
+                 2. Drums: create_track instrument \"Drums\" with device \"Drum Machine\"; write_drums per section (vary hats and fills; keep the kick of the genre).\n\
+                 3. Bass: write_bassline following the chord progression of each section.\n\
+                 4. Harmony: write_chords (voicing close for pads, rhythm for stabs) on a pad or keys track.\n\
+                 5. Lead / arp: write_arp or a melody with create_clip notes in the key; leave space for the vocal or hook.\n\
+                 6. Sections: create_scene per section and put each part's clip in the section's slot (slot = scene name). Use transform_clip for variations (transpose, thin, humanize) instead of rewriting.\n\
+                 7. Mix: set_track volumes in dB (drums and bass loudest, pads -10 dB or lower), pan supporting parts, sends to an effect track with reverb.\n\
+                 8. Update set_song_plan with what was built, then launch the first scene.\n\
+                 Keep every part in the key ({{key}} from the plan); use Roman numerals so changes of key stay easy.",
+                idea = a.idea
+            ),
+        )]
+    }
+
     #[prompt(
         description = "Sketch a song: tracks with instruments, scenes for the sections, and clips with notes."
     )]
@@ -1699,6 +2379,14 @@ mod tests {
             Some("get_project") => Ok(snapshot()),
             Some("create_track") => Ok(json!({"bank": "main", "index": 2})),
             Some("create_scene") => Ok(json!({"index": 2})),
+            Some("read_notes") => Ok(json!({
+                "clip": {"loop_length": 4.0},
+                "notes": [
+                    {"x": 0, "key": 60, "velocity": 100, "duration": 0.5},
+                    {"x": 32, "key": 64, "velocity": 80, "duration": 0.5}
+                ]
+            })),
+            Some("get_song_plan") => Ok(json!({"text": "{\"key\":\"A minor\"}"})),
             Some("get_device") => Ok(json!({
                 "pages": ["Main", "Filter"],
                 "params": [{"name": "Cutoff"}, {"name": "Resonance"}]
@@ -1721,6 +2409,182 @@ mod tests {
             .filter(|r| r["cmd"] == cmd)
             .cloned()
             .collect()
+    }
+
+    #[test]
+    fn steps_and_rates() {
+        assert_eq!(parse_step(None, 0.25).ok(), Some(0.25));
+        assert_eq!(parse_step(Some("1/16"), 1.0).ok(), Some(0.25));
+        assert_eq!(parse_step(Some("1/8"), 1.0).ok(), Some(0.5));
+        assert!((parse_step(Some("1/8T"), 1.0).expect("triplet") - 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(parse_step(Some("2"), 1.0).ok(), Some(2.0));
+        assert!(parse_step(Some("1/1024"), 1.0).is_err());
+        assert!(parse_step(Some("fast"), 1.0).is_err());
+    }
+
+    #[test]
+    fn drum_voices_resolve_names_notes_and_numbers() {
+        let reg = Registry::with_builtin();
+        let gm = reg.get("generic");
+        assert_eq!(voice_key(gm, "kick").ok(), Some(36));
+        assert_eq!(voice_key(gm, "Closed Hat").ok(), Some(42));
+        assert_eq!(voice_key(gm, "C1").ok(), Some(36));
+        assert_eq!(voice_key(None, "38").ok(), Some(38));
+        assert!(
+            voice_key(gm, "cowbell-ish")
+                .unwrap_err()
+                .message
+                .contains("kick")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_chords_creates_a_clip_and_writes_voiced_chords() {
+        let (s, log) = rig().await;
+        let r = s
+            .write_chords(Parameters(WriteChordsArgs {
+                target: Target {
+                    track: Ref::Name("synth".into()),
+                    slot: Ref::Name("verse".into()),
+                    name: Some("chords".into()),
+                    mode: None,
+                },
+                key: Some("A minor".into()),
+                progression: "i VI III VII".into(),
+                beats_per_chord: None,
+                octave: None,
+                voicing: None,
+                rhythm: None,
+                step: None,
+                velocity: None,
+            }))
+            .await
+            .expect("tool");
+        assert!(r.contains("\"new_clip\":true"), "{r}");
+        assert_eq!(sent(&log, "create_clip")[0]["length"], 16);
+        let w = &sent(&log, "write_notes")[0];
+        assert_eq!(w["notes"].as_array().map(Vec::len), Some(12), "4 triads");
+        assert_eq!(w["step"], 1.0, "chords on the coarsest (beat) grid");
+        assert_eq!(sent(&log, "set_clip")[0]["name"], "chords");
+    }
+
+    #[tokio::test]
+    async fn write_drums_maps_voices_to_general_midi_keys() {
+        let (s, log) = rig().await;
+        let mut patterns = std::collections::BTreeMap::new();
+        patterns.insert("kick".to_owned(), "x...x...x...x...".to_owned());
+        let mut euclid = std::collections::BTreeMap::new();
+        euclid.insert(
+            "closed_hat".to_owned(),
+            EuclidArg {
+                hits: 5,
+                steps: 8,
+                rotate: None,
+            },
+        );
+        s.write_drums(Parameters(WriteDrumsArgs {
+            target: Target {
+                track: Ref::Number(1),
+                slot: Ref::Number(1),
+                name: None,
+                mode: None,
+            },
+            instrument: None,
+            patterns,
+            euclid,
+            step: None,
+            length_beats: None,
+            velocity: None,
+        }))
+        .await
+        .expect("tool");
+        let notes = sent(&log, "write_notes")[0]["notes"].clone();
+        let keys: Vec<u64> = notes
+            .as_array()
+            .expect("notes")
+            .iter()
+            .filter_map(|n| n["key"].as_u64())
+            .collect();
+        assert_eq!(keys.iter().filter(|k| **k == 36).count(), 4);
+        assert_eq!(keys.iter().filter(|k| **k == 42).count(), 10);
+    }
+
+    #[tokio::test]
+    async fn composing_rejects_bad_input_before_sending() {
+        let (s, log) = rig().await;
+        let target = || Target {
+            track: Ref::Number(1),
+            slot: Ref::Number(1),
+            name: None,
+            mode: None,
+        };
+        let e = s
+            .write_bassline(Parameters(WriteBasslineArgs {
+                target: target(),
+                key: None,
+                progression: "i iv v".into(),
+                beats_per_chord: None,
+                octave: None,
+                style: None,
+                rhythm: None,
+                step: None,
+                velocity: None,
+            }))
+            .await
+            .expect_err("roman without key");
+        assert!(e.message.contains("key"));
+        assert!(
+            s.write_arp(Parameters(WriteArpArgs {
+                target: target(),
+                key: None,
+                progression: "Am Hm".into(),
+                beats_per_chord: None,
+                octave: None,
+                direction: None,
+                rate: None,
+                octaves: None,
+                gate: None,
+                velocity: None,
+                seed: None,
+            }))
+            .await
+            .is_err()
+        );
+        assert!(sent(&log, "create_clip").is_empty() && sent(&log, "write_notes").is_empty());
+    }
+
+    #[tokio::test]
+    async fn song_plan_round_trips_as_json() {
+        let (s, log) = rig().await;
+        s.set_song_plan(Parameters(SongPlanArgs {
+            plan: json!({"key": "A minor", "tempo": 124}),
+        }))
+        .await
+        .expect("set");
+        let stored = sent(&log, "set_song_plan")[0]["text"]
+            .as_str()
+            .expect("text")
+            .to_owned();
+        assert_eq!(
+            serde_json::from_str::<Json>(&stored).expect("json")["tempo"],
+            124
+        );
+        let got = s.get_song_plan().await.expect("get");
+        assert!(got.contains("A minor"), "{got}");
+    }
+
+    #[tokio::test]
+    async fn transform_clip_needs_a_clip() {
+        let (s, _) = rig().await;
+        let e = s
+            .transform_clip(Parameters(TransformClipArgs {
+                track: Ref::Number(1),
+                slot: Ref::Number(1),
+                ops: vec![theory::Transform::Transpose { semitones: 12 }],
+            }))
+            .await
+            .expect_err("empty slot");
+        assert!(e.message.contains("no clip"));
     }
 
     #[test]
@@ -1779,7 +2643,7 @@ mod tests {
     #[test]
     fn every_tool_has_a_description_and_the_set_is_small() {
         let tools = BridgeServer::tool_router().list_all();
-        assert!((20..=40).contains(&tools.len()), "{} tools", tools.len());
+        assert!((20..=45).contains(&tools.len()), "{} tools", tools.len());
         for t in &tools {
             assert!(
                 t.description.as_deref().is_some_and(|d| d.len() > 10),

@@ -26,6 +26,16 @@ pub struct SendView {
     pub name: String,
 }
 
+/// A clip in a launcher slot.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct ClipView {
+    /// 0-based slot.
+    pub slot: u32,
+    /// Clip name.
+    pub name: String,
+}
+
 /// A track.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
@@ -40,6 +50,8 @@ pub struct TrackView {
     pub devices: Vec<DeviceView>,
     /// Sends.
     pub sends: Vec<SendView>,
+    /// Launcher clips (slots with content).
+    pub clips: Vec<ClipView>,
 }
 
 impl Default for TrackView {
@@ -50,6 +62,7 @@ impl Default for TrackView {
             name: String::new(),
             devices: Vec::new(),
             sends: Vec::new(),
+            clips: Vec::new(),
         }
     }
 }
@@ -228,6 +241,13 @@ impl ProjectView {
             Ref::Number(n) => Ok(n - 1),
             Ref::Name(_) => self.scene(r),
         }
+    }
+
+    /// Whether a slot of a track holds a clip.
+    #[must_use]
+    pub fn has_clip(&self, track: TrackAddr, slot: u32) -> bool {
+        self.track_view(track)
+            .is_some_and(|t| t.clips.iter().any(|c| c.slot == slot))
     }
 
     /// Resolves a device on a track to its 0-based index.

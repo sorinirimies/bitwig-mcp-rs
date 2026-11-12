@@ -524,6 +524,13 @@ pub enum Command {
         /// The complete message, `F0 … F7`.
         bytes: Vec<u8>,
     },
+    /// The song plan stored in the project (a JSON text; empty when none).
+    GetSongPlan,
+    /// Store the song plan in the project (saved with it).
+    SetSongPlan {
+        /// JSON text, at most 60000 characters.
+        text: String,
+    },
     /// List Bitwig application actions (menu commands) whose id or name contains `query`.
     ListActions {
         /// Case-insensitive filter; empty = all.

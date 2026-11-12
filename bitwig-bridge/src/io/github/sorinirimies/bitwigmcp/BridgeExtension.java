@@ -85,6 +85,8 @@ public class BridgeExtension extends ControllerExtension
    private final Map<String, ClipLauncherSlotBank> slotBanks = new HashMap<>();
    private final boolean withSysex;
    private Server server;
+   /** The song plan, saved in the project (Studio I/O panel → MCP). */
+   private com.bitwig.extension.controller.api.SettableStringValue songPlan;
    private volatile boolean running;
    private DeviceBank[] mainDevices;
    private DeviceBank[] fxDevices;
@@ -201,6 +203,8 @@ public class BridgeExtension extends ControllerExtension
             notes.remove(key);
       });
 
+      songPlan = host.getDocumentState().getStringSetting("Song plan", "MCP", 60000, "");
+      songPlan.markInterested();
       browser = host.createPopupBrowser();
       sysexOut = withSysex ? host.getMidiOutPort(0) : null;
       mark(browser.exists(), browser.contentTypeNames(), browser.selectedContentTypeIndex());
@@ -557,6 +561,26 @@ public class BridgeExtension extends ControllerExtension
             res.put("sent", bytes.length);
             res.put("note", "sent to the MIDI output assigned to the MCP bridge controller");
             r.ok(res);
+            return;
+         }
+         case "get_song_plan":
+         {
+            final Map<String, Object> m = new LinkedHashMap<>();
+            m.put("text", songPlan.get());
+            r.ok(m);
+            return;
+         }
+         case "set_song_plan":
+         {
+            final String text = q.str("text");
+            if (text.length() > 60000)
+               throw new IllegalArgumentException("the song plan is limited to 60000 characters");
+            songPlan.set(text);
+            later(SETTLE_MS, r, () -> {
+               final Map<String, Object> m = new LinkedHashMap<>();
+               m.put("stored", songPlan.get().length());
+               r.ok(m);
+            });
             return;
          }
          case "list_actions":
