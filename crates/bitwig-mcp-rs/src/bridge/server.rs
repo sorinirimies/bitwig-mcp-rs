@@ -26,7 +26,7 @@ use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
 use super::client::Bridge;
-use super::project::{ProjectView, Ref};
+use super::project::{ProjectView, Ref, TrackView};
 use super::protocol::{
     ClipAction, ClipChange, Command, DeviceAction, DeviceSource, GridNote, Insert, Rgb,
     SceneAction, SendLevel, TrackAction, TrackAddr, TrackChange, TrackKind, TransportAction,
@@ -881,7 +881,7 @@ pub struct ListDevicesArgs {
     pub query: Option<String>,
     /// Browser tab: "Devices" (default) or "Presets".
     pub content_type: Option<String>,
-    /// At most this many (default 400).
+    /// At most this many (default 2000).
     pub max: Option<u32>,
 }
 
@@ -2269,15 +2269,16 @@ impl BridgeServer {
         description = "List what Bitwig has installed: every device (or preset) in the browser, each Bitwig device annotated with its role and sound tips from the built-in guide. Use it before choosing instruments and effects."
     )]
     async fn list_devices(&self, Parameters(a): Parameters<ListDevicesArgs>) -> ToolResult {
-        let master = TrackAddr {
-            bank: super::protocol::TrackBank::Master,
-            index: 0,
-        };
+        // the browser offers what fits the track: instruments only on tracks that can hold them
+        let view = self.view().await?;
+        let track = view.tracks.first().map(TrackView::addr).ok_or_else(|| {
+            bad("create a track first: Bitwig lists instruments only for a track that can hold them")
+        })?;
         let r = self
             .call_long(Command::ListBrowser {
-                track: master,
+                track,
                 content_type: a.content_type.clone().unwrap_or_else(|| "Devices".into()),
-                max: a.max.unwrap_or(400).clamp(1, 2000),
+                max: a.max.unwrap_or(2000).clamp(1, 2000),
             })
             .await?;
         let needle = a.query.as_deref().map(str::to_lowercase);
@@ -2297,7 +2298,16 @@ impl BridgeServer {
                     .collect()
             })
             .unwrap_or_default();
-        out(&json!({"total_in_browser": r["total"], "shown": items.len(), "items": items}))
+        // Bitwig's own devices first, then everything else (presets, plugins)
+        let (mut known, other): (Vec<Json>, Vec<Json>) =
+            items.into_iter().partition(|i| i.get("kind").is_some());
+        let other_names: Vec<Json> = other.into_iter().map(|i| i["name"].clone()).collect();
+        known.sort_by_key(|i| i["kind"].as_str().unwrap_or_default().to_owned());
+        out(&json!({
+            "total_in_browser": r["total"],
+            "bitwig_devices": known,
+            "presets_and_plugins": other_names,
+        }))
     }
 
     #[tool(

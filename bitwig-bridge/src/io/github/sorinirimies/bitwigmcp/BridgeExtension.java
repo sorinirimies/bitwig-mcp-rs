@@ -81,6 +81,8 @@ public class BridgeExtension extends ControllerExtension
    private IntegerValue cursorClipSlot;
    private PopupBrowser browser;
    private BrowserResultsItemBank results;
+   /** "Any" items of the browser's filter columns: selecting them resets the filters. */
+   private final List<com.bitwig.extension.controller.api.BrowserFilterItem> wildcards = new ArrayList<>();
    private com.bitwig.extension.controller.api.MidiOut sysexOut;
    /** Send and clip-slot banks by "bank:index"; effect tracks and the master have none. */
    private final Map<String, SendBank> sendBanks = new HashMap<>();
@@ -212,6 +214,15 @@ public class BridgeExtension extends ControllerExtension
       browser = host.createPopupBrowser();
       sysexOut = withSysex ? host.getMidiOutPort(0) : null;
       mark(browser.exists(), browser.contentTypeNames(), browser.selectedContentTypeIndex());
+      for (final com.bitwig.extension.controller.api.BrowserFilterColumn c : new com.bitwig.extension.controller.api.BrowserFilterColumn[] {
+         browser.smartCollectionColumn(), browser.locationColumn(), browser.deviceColumn(),
+         browser.categoryColumn(), browser.tagColumn(), browser.deviceTypeColumn(),
+         browser.fileTypeColumn(), browser.creatorColumn() })
+      {
+         final com.bitwig.extension.controller.api.BrowserFilterItem any = c.getWildcardItem();
+         any.isSelected().markInterested();
+         wildcards.add(any);
+      }
       results = browser.resultsColumn().createItemBank(RESULTS);
       mark(results.itemCount(), results.scrollPosition(), results.canScrollForwards());
       for (int i = 0; i < RESULTS; i++)
@@ -1429,6 +1440,7 @@ public class BridgeExtension extends ControllerExtension
          }
          final int tab = t;
          browser.selectedContentTypeIndex().set(tab);
+         resetFilters();
          results.scrollPosition().set(0);
          waitFor(() -> browser.selectedContentTypeIndex().get() == tab
             && results.itemCount().get() > 0 && results.getItemAt(0).exists().get(), 5000,
@@ -1438,6 +1450,14 @@ public class BridgeExtension extends ControllerExtension
    }
 
    private static final int MAX_PAGES = 150;
+
+   /** Bitwig keeps browser filters between uses: clear them so earlier searches don't hide
+    * results (seen: an audio-FX device type left from browsing on the master). */
+   private void resetFilters()
+   {
+      for (final com.bitwig.extension.controller.api.BrowserFilterItem any : wildcards)
+         any.isSelected().set(true);
+   }
 
    /** Opens the browser on a track, collects result names page by page, then cancels. */
    private void listBrowser(final Addr a, final String contentType, final int max, final Reply r)
@@ -1459,6 +1479,7 @@ public class BridgeExtension extends ControllerExtension
          }
          final int tab = t;
          browser.selectedContentTypeIndex().set(tab);
+         resetFilters();
          results.scrollPosition().set(0);
          waitFor(() -> browser.selectedContentTypeIndex().get() == tab
             && results.itemCount().get() > 0 && results.getItemAt(0).exists().get(), 5000,
