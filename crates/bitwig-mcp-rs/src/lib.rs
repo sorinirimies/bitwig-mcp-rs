@@ -11,6 +11,7 @@
 pub mod bridge;
 pub mod capture;
 pub mod config;
+pub mod devices;
 pub mod extension;
 /// Hardware synth profiles: the [`synthazia_hardware`] crate, shared with the Synthazia DAW.
 pub use synthazia_hardware as hardware;

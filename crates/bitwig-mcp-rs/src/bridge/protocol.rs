@@ -524,6 +524,26 @@ pub enum Command {
         /// The complete message, `F0 … F7`.
         bytes: Vec<u8>,
     },
+    /// Put a device into one pad of a drum machine (the pad of MIDI key `key`).
+    DrumPadInsert {
+        /// The track.
+        track: TrackAddr,
+        /// 0-based device (a Drum Machine).
+        device: u32,
+        /// MIDI key of the pad, 0-127.
+        key: u8,
+        /// What to insert.
+        source: DeviceSource,
+    },
+    /// The names in a browser tab (opened on the track, then cancelled).
+    ListBrowser {
+        /// Track to open the browser on (nothing is inserted).
+        track: TrackAddr,
+        /// Browser tab, e.g. "Devices", "Presets".
+        content_type: String,
+        /// At most this many names.
+        max: u32,
+    },
     /// The song plan stored in the project (a JSON text; empty when none).
     GetSongPlan,
     /// Store the song plan in the project (saved with it).

@@ -859,6 +859,32 @@ pub struct ExportDialogArgs {
     pub kind: ExportKind,
 }
 
+// ---------------------------------------------------------------- sound parameters
+
+/// A drum kit.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DrumKitArgs {
+    /// Track with the Drum Machine.
+    pub track: Ref,
+    /// The Drum Machine device (name or 1-based position; default "Drum Machine").
+    pub device: Option<Ref>,
+    /// Pad → device to load, e.g. {"kick": "v8 Kick", "snare": "v8 Snare", "clap": "v8 Clap",
+    /// "closed_hat": "v8 Hat", "open_hat": "v8 Hat"}. Pads are General MIDI key names, note
+    /// names ("C1") or numbers.
+    pub pads: std::collections::BTreeMap<String, String>,
+}
+
+/// Device listing.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListDevicesArgs {
+    /// Only names containing this (case-insensitive).
+    pub query: Option<String>,
+    /// Browser tab: "Devices" (default) or "Presets".
+    pub content_type: Option<String>,
+    /// At most this many (default 400).
+    pub max: Option<u32>,
+}
+
 // ---------------------------------------------------------------- the server
 
 /// The bridge-backed MCP server.
@@ -2237,6 +2263,84 @@ impl BridgeServer {
         )
     }
 
+    // ------------------------------------------------------------ sound
+
+    #[tool(
+        description = "List what Bitwig has installed: every device (or preset) in the browser, each Bitwig device annotated with its role and sound tips from the built-in guide. Use it before choosing instruments and effects."
+    )]
+    async fn list_devices(&self, Parameters(a): Parameters<ListDevicesArgs>) -> ToolResult {
+        let master = TrackAddr {
+            bank: super::protocol::TrackBank::Master,
+            index: 0,
+        };
+        let r = self
+            .call_long(Command::ListBrowser {
+                track: master,
+                content_type: a.content_type.clone().unwrap_or_else(|| "Devices".into()),
+                max: a.max.unwrap_or(400).clamp(1, 2000),
+            })
+            .await?;
+        let needle = a.query.as_deref().map(str::to_lowercase);
+        let items: Vec<Json> = r["names"]
+            .as_array()
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(Json::as_str)
+                    .filter(|n| needle.as_ref().is_none_or(|q| n.to_lowercase().contains(q)))
+                    .map(|n| match crate::devices::find(n) {
+                        Some(g) => {
+                            json!({"name": n, "kind": g.kind, "role": g.role, "tips": g.tips})
+                        }
+                        None => json!({"name": n}),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out(&json!({"total_in_browser": r["total"], "shown": items.len(), "items": items}))
+    }
+
+    #[tool(
+        description = "Fill a Drum Machine's pads with instruments, e.g. pads {\"kick\": \"v8 Kick\", \"snare\": \"v8 Snare\", \"closed_hat\": \"v8 Hat\"}. Pad names are the General MIDI keys write_drums uses, so a kit built here plays the drum patterns written there."
+    )]
+    async fn build_drum_kit(&self, Parameters(a): Parameters<DrumKitArgs>) -> ToolResult {
+        if a.pads.is_empty() || a.pads.len() > 32 {
+            return Err(bad("give 1-32 pads"));
+        }
+        let (view, track) = self.track_of(&a.track).await?;
+        let dref = a.device.unwrap_or_else(|| Ref::Name("Drum Machine".into()));
+        let device = view.device(track, &dref).map_err(bad)?;
+        let registry = self.profiles();
+        let gm = registry.get("generic");
+        let mut plan = Vec::new();
+        for (pad, name) in &a.pads {
+            plan.push((voice_key(gm, pad)?, pad.clone(), name.clone()));
+        }
+        let mut done = Vec::new();
+        let mut last = Json::Null;
+        for (key, pad, name) in plan {
+            match self
+                .call_long(Command::DrumPadInsert {
+                    track,
+                    device,
+                    key,
+                    source: DeviceSource::Browser {
+                        name: name.clone(),
+                        content_type: None,
+                    },
+                })
+                .await
+            {
+                Ok(r) => {
+                    last = r;
+                    done.push(json!({"pad": pad, "key": key, "device": name}));
+                }
+                Err(e) => done.push(json!({"pad": pad, "key": key, "error": e.message})),
+            }
+        }
+        out(&json!({"pads": done, "drum_pads_now": last["drum_pads"]}))
+    }
+
     // ------------------------------------------------------------ export
 
     #[tool(
@@ -2563,7 +2667,12 @@ impl BridgeServer {
     }
 }
 
-const RESOURCES: [(&str, &str, &str); 3] = [
+const RESOURCES: [(&str, &str, &str); 4] = [
+    (
+        "bitwig://devices",
+        "devices",
+        "Guide to Bitwig's own devices: role and sound recipes (list_devices shows what is installed).",
+    ),
     (
         "bitwig://project",
         "project",
@@ -2623,6 +2732,9 @@ impl ServerHandler for BridgeServer {
         let text = match request.uri.as_str() {
             "bitwig://project" => self.get_project().await?,
             "bitwig://instruments" => self.list_instruments().await?,
+            "bitwig://devices" => {
+                serde_json::to_string_pretty(crate::devices::GUIDE).map_err(err)?
+            }
             "bitwig://protocol" => {
                 serde_json::to_string_pretty(&super::protocol::schema()).map_err(err)?
             }

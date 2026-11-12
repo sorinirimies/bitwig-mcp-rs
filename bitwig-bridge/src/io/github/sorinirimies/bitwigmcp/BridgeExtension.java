@@ -75,6 +75,8 @@ public class BridgeExtension extends ControllerExtension
    private CursorTrack cursorTrack;
    private PinnableCursorDevice cursorDevice;
    private CursorRemoteControlsPage remotePage;
+   /** Pads of the cursor device when it is a drum machine: index = MIDI key. */
+   private com.bitwig.extension.controller.api.DrumPadBank drumPads;
    private PinnableCursorClip cursorClip;
    private IntegerValue cursorClipSlot;
    private PopupBrowser browser;
@@ -171,6 +173,10 @@ public class BridgeExtension extends ControllerExtension
       mark(cursorDevice.exists(), cursorDevice.name(), cursorDevice.position(),
          cursorDevice.isEnabled(), cursorDevice.isWindowOpen(), cursorDevice.presetName(),
          cursorDevice.isPlugin());
+      drumPads = cursorDevice.createDrumPadBank(128);
+      mark(cursorDevice.hasDrumPads());
+      for (int i = 0; i < 128; i++)
+         mark(drumPads.getItemAt(i).exists(), drumPads.getItemAt(i).name());
       remotePage = cursorDevice.createCursorRemoteControlsPage(PARAMS);
       mark(remotePage.pageNames(), remotePage.selectedPageIndex(), remotePage.pageCount());
       for (int i = 0; i < PARAMS; i++)
@@ -581,6 +587,42 @@ public class BridgeExtension extends ControllerExtension
             });
             return;
          }
+         case "drum_pad_insert":
+            focusDevice(q, r, () -> {
+               if (!cursorDevice.hasDrumPads().get())
+                  throw new IllegalArgumentException("this device has no drum pads (use Drum Machine)");
+               final int key = q.integer("key");
+               if (key < 0 || key > 127)
+                  throw new IllegalArgumentException("key must be 0-127");
+               final InsertionPoint ip = drumPads.getItemAt(key).insertionPoint();
+               final Json.Obj src = q.obj("source");
+               final Runnable done = () -> later(600, r, () -> r.ok(cursorDeviceSnapshot()));
+               switch (src.str("kind"))
+               {
+                  case "browser":
+                     browse(ip, src.str("name"), src.strOr("content_type", "Devices"), r, done);
+                     return;
+                  case "clap":
+                     ip.insertCLAPDevice(src.str("id"));
+                     done.run();
+                     return;
+                  case "vst3":
+                     ip.insertVST3Device(src.str("id"));
+                     done.run();
+                     return;
+                  case "file":
+                     ip.insertFile(src.str("path"));
+                     done.run();
+                     return;
+                  default:
+                     throw new IllegalArgumentException("unknown source");
+               }
+            });
+            return;
+         case "list_browser":
+            listBrowser(addr(q.obj("track")), q.strOr("content_type", "Devices"),
+               Math.max(1, Math.min(2000, q.integer("max"))), r);
+            return;
          case "list_actions":
             r.ok(listActions(q.strOr("query", "")));
             return;
@@ -892,6 +934,21 @@ public class BridgeExtension extends ControllerExtension
          if (remotePage.getParameter(i).exists().get())
             params.add(paramSnapshot(i));
       m.put("params", params);
+      if (cursorDevice.hasDrumPads().get())
+      {
+         final List<Object> pads = new ArrayList<>();
+         for (int i = 0; i < 128; i++)
+         {
+            final com.bitwig.extension.controller.api.DrumPad pad = drumPads.getItemAt(i);
+            if (!pad.exists().get() || pad.name().get().isEmpty())
+               continue;
+            final Map<String, Object> x = new LinkedHashMap<>();
+            x.put("key", i);
+            x.put("name", pad.name().get());
+            pads.add(x);
+         }
+         m.put("drum_pads", pads);
+      }
       return m;
    }
 
@@ -1381,6 +1438,54 @@ public class BridgeExtension extends ControllerExtension
    }
 
    private static final int MAX_PAGES = 150;
+
+   /** Opens the browser on a track, collects result names page by page, then cancels. */
+   private void listBrowser(final Addr a, final String contentType, final int max, final Reply r)
+   {
+      if (browser.exists().get())
+         browser.cancel();
+      a.track.endOfDeviceChainInsertionPoint().browse();
+      waitFor(() -> browser.exists().get(), 3000, "the browser to open", r, () -> {
+         final String[] types = browser.contentTypeNames().get();
+         int t = -1;
+         for (int i = 0; i < types.length; i++)
+            if (types[i].equalsIgnoreCase(contentType))
+               t = i;
+         if (t < 0)
+         {
+            browser.cancel();
+            throw new IllegalArgumentException("no browser tab '" + contentType + "'; have "
+               + String.join(", ", types));
+         }
+         final int tab = t;
+         browser.selectedContentTypeIndex().set(tab);
+         results.scrollPosition().set(0);
+         waitFor(() -> browser.selectedContentTypeIndex().get() == tab
+            && results.itemCount().get() > 0 && results.getItemAt(0).exists().get(), 5000,
+            "browser results", r, () -> later(300, r, () -> collect(new ArrayList<>(), max, 0, r)));
+      });
+   }
+
+   private void collect(final List<String> names, final int max, final int page, final Reply r)
+   {
+      for (int i = 0; i < RESULTS && names.size() < max; i++)
+      {
+         final BrowserResultsItem it = results.getItemAt(i);
+         if (it.exists().get())
+            names.add(it.name().get());
+      }
+      if (names.size() < max && results.canScrollForwards().get() && page < MAX_PAGES)
+      {
+         results.scrollPageForwards();
+         later(300, r, () -> collect(names, max, page + 1, r));
+         return;
+      }
+      final Map<String, Object> m = new LinkedHashMap<>();
+      m.put("total", results.itemCount().get());
+      m.put("names", names);
+      browser.cancel();
+      r.ok(m);
+   }
 
    /** Pages through the results: an exact name wins; else the first prefix match. */
    private void scan(final String needle, final int page, final int prefixAt,

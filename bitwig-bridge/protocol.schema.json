@@ -1405,6 +1405,74 @@
         "type": "object"
       },
       {
+        "description": "Put a device into one pad of a drum machine (the pad of MIDI key `key`).",
+        "properties": {
+          "cmd": {
+            "const": "drum_pad_insert",
+            "type": "string"
+          },
+          "device": {
+            "description": "0-based device (a Drum Machine).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "key": {
+            "description": "MIDI key of the pad, 0-127.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/$defs/DeviceSource",
+            "description": "What to insert."
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "The track."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "device",
+          "key",
+          "source"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The names in a browser tab (opened on the track, then cancelled).",
+        "properties": {
+          "cmd": {
+            "const": "list_browser",
+            "type": "string"
+          },
+          "content_type": {
+            "description": "Browser tab, e.g. \"Devices\", \"Presets\".",
+            "type": "string"
+          },
+          "max": {
+            "description": "At most this many names.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "track": {
+            "$ref": "#/$defs/TrackAddr",
+            "description": "Track to open the browser on (nothing is inserted)."
+          }
+        },
+        "required": [
+          "cmd",
+          "track",
+          "content_type",
+          "max"
+        ],
+        "type": "object"
+      },
+      {
         "description": "The song plan stored in the project (a JSON text; empty when none).",
         "properties": {
           "cmd": {
