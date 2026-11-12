@@ -86,6 +86,17 @@ impl Drop for Session {
             for (name, args) in [
                 ("scene_action", json!({"scene": NAME, "action": "delete"})),
                 ("track_action", json!({"track": NAME, "action": "delete"})),
+                ("scene_action", json!({"scene": F_S1, "action": "delete"})),
+                ("scene_action", json!({"scene": F_S2, "action": "delete"})),
+                (
+                    "track_action",
+                    json!({"track": F_TRACK, "action": "delete"}),
+                ),
+                ("track_action", json!({"track": F_FX, "action": "delete"})),
+                (
+                    "track_action",
+                    json!({"track": F_DRUMS, "action": "delete"}),
+                ),
             ] {
                 let id = self.next;
                 self.next += 1;
@@ -102,10 +113,21 @@ impl Drop for Session {
 }
 
 const NAME: &str = "mcp-live-test";
+const F_TRACK: &str = "mcp-live-melody";
+const F_FX: &str = "mcp-live-fx";
+const F_DRUMS: &str = "mcp-live-drums";
+const F_S1: &str = "mcp-live-s1";
+const F_S2: &str = "mcp-live-s2";
+
+/// Both live tests share one Bitwig (one selection, one browser): never in parallel.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 #[ignore = "needs Bitwig with the bridge extension; run with `just test-live`"]
 fn build_play_and_clean_up() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = Session::start();
 
     let status = s.tool("status", json!({}));
@@ -184,4 +206,151 @@ fn build_play_and_clean_up() {
     s.tool("track_action", json!({"track": NAME, "action": "delete"}));
     let project = s.tool("get_project", json!({}));
     assert!(!project.to_string().contains(NAME), "left-overs: {project}");
+}
+
+/// Notes of a clip as sorted MIDI keys.
+fn keys(s: &mut Session, track: &str, slot: &Value) -> Vec<u64> {
+    let read = s.tool("read_notes", json!({"track": track, "slot": slot}));
+    let mut k: Vec<u64> = read["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .filter_map(|n| n["key"].as_u64().or_else(|| n["note"].as_u64()))
+        .collect();
+    k.sort_unstable();
+    k
+}
+
+#[test]
+#[ignore = "needs Bitwig with the bridge extension; run with `just test-live`"]
+fn composing_chains_meters_and_recording() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = Session::start();
+    let status = s.tool("status", json!({}));
+    assert_eq!(status["connected"], true, "{status}");
+    assert!(status["server_version"].is_string(), "{status}");
+    let new_extension = status["extension"]["extension_version"]
+        .as_str()
+        .is_some_and(|v| v >= "0.2");
+    if !new_extension {
+        eprintln!("old extension: skipping meters, pad effects and recording; restart Bitwig");
+    }
+
+    s.tool(
+        "create_track",
+        json!({"kind": "instrument", "name": F_TRACK, "device": "Polymer"}),
+    );
+    let s1 = s.tool("create_scene", json!({"name": F_S1}))["scene"].clone();
+    let s2 = s.tool("create_scene", json!({"name": F_S2}))["scene"].clone();
+
+    // a hook in the key, over chords
+    s.tool(
+        "write_melody",
+        json!({"track": F_TRACK, "slot": s1, "key": "A minor", "progression": "i VI III VII",
+               "seed": 3, "name": "hook"}),
+    );
+    let hook = keys(&mut s, F_TRACK, &s1);
+    assert!(hook.len() >= 8, "{hook:?}");
+    let a_minor = [9, 11, 0, 2, 4, 5, 7];
+    assert!(hook.iter().all(|k| a_minor.contains(&(k % 12))), "{hook:?}");
+
+    // a varied copy in another scene
+    s.tool(
+        "copy_clip",
+        json!({"track": F_TRACK, "slot": s1,
+               "to": [{"slot": s2, "ops": [{"op": "transpose", "semitones": 12}]}]}),
+    );
+    let copy = keys(&mut s, F_TRACK, &s2);
+    let up: Vec<u64> = hook.iter().map(|k| k + 12).collect();
+    assert_eq!(copy, up);
+
+    // several parameters at once
+    let dev = s.tool("get_device", json!({"track": F_TRACK, "device": 1}));
+    let names: Vec<String> = dev["params"]
+        .as_array()
+        .expect("params")
+        .iter()
+        .take(2)
+        .filter_map(|p| p["name"].as_str().map(str::to_owned))
+        .collect();
+    let set = s.tool(
+        "set_device_params",
+        json!({"track": F_TRACK, "device": 1,
+               "params": names.iter().map(|n| json!({"param": n, "value": 0.4})).collect::<Vec<_>>()}),
+    );
+    assert_eq!(set.as_array().map(Vec::len), Some(names.len()), "{set}");
+
+    // an effect chain, and a reverb bus with a send
+    let chain = s.tool(
+        "insert_chain",
+        json!({"track": F_TRACK, "devices": [{"name": "EQ-5"}, {"name": "Compressor"}]}),
+    );
+    assert!(!chain.to_string().contains("error"), "{chain}");
+    let fx = s.tool(
+        "create_return",
+        json!({"name": F_FX, "devices": [{"name": "Reverb"}],
+               "sends": [{"track": F_TRACK, "volume_db": -12}]}),
+    );
+    assert!(!fx["sends"].to_string().contains("error"), "{fx}");
+
+    // the summary is small, the detail is not
+    let summary = s.tool("get_project", json!({}));
+    assert_eq!(summary["summary"], true);
+    let detail = s.tool("get_project", json!({"detail": true}));
+    assert!(detail.to_string().len() > summary.to_string().len());
+
+    // build the song from parts
+    let built = s.tool(
+        "build_song",
+        json!({"sections": [{"name": F_S2, "parts": [
+            {"kind": "chords", "track": F_TRACK, "progression": "i VI", "key": "A minor"}]}]}),
+    );
+    assert_eq!(built["failed"], 0, "{built}");
+
+    if new_extension {
+        // drum pad effects
+        s.tool(
+            "create_track",
+            json!({"kind": "instrument", "name": F_DRUMS, "device": "Drum Machine"}),
+        );
+        let kit = s.tool(
+            "build_drum_kit",
+            json!({"track": F_DRUMS, "pads": {"snare": "v8 Snare"},
+                   "effects": {"snare": ["Reverb"]}}),
+        );
+        assert!(!kit["effects"].to_string().contains("error"), "{kit}");
+
+        // meters, an arrangement take and an automation take (short: one bar each)
+        s.tool("scene_action", json!({"scene": F_S1, "action": "launch"}));
+        let m = s.tool("get_meters", json!({"window_ms": 600}));
+        assert!(m["meters"].as_array().is_some_and(|a| !a.is_empty()), "{m}");
+        s.tool("transport", json!({"action": "stop"}));
+        let rec = s.tool(
+            "record_arrangement",
+            json!({"scenes": [{"scene": F_S1, "bars": 1}]}),
+        );
+        assert_eq!(rec["recorded_bars"], 1, "{rec}");
+        let auto = s.tool(
+            "record_automation",
+            json!({"track": F_TRACK, "device": 1, "param": names[0], "from": 0.2, "to": 0.8,
+                   "bars": 1, "curve": "ease_in"}),
+        );
+        assert!(auto["steps"].as_u64().unwrap_or(0) >= 4, "{auto}");
+    }
+
+    // clean up
+    s.tool("scene_action", json!({"scene": F_S1, "action": "delete"}));
+    s.tool("scene_action", json!({"scene": F_S2, "action": "delete"}));
+    for t in [F_TRACK, F_FX, F_DRUMS] {
+        if new_extension || t != F_DRUMS {
+            s.tool("track_action", json!({"track": t, "action": "delete"}));
+        }
+    }
+    let project = s.tool("get_project", json!({}));
+    assert!(
+        !project.to_string().contains("mcp-live"),
+        "left-overs: {project}"
+    );
 }
