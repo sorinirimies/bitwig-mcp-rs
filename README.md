@@ -85,8 +85,8 @@ the inputs it is plugged into). Then `play_notes`, `send_midi`, `hardware_progra
 `hardware_set` maps parameter names to CC / 14-bit CC / NRPN / pitch bend / aftertouch via
 instrument profiles from the [`synthazia-hardware`](https://crates.io/crates/synthazia-hardware)
 crate (shared with the Synthazia DAW). Built in: a General MIDI one and
-the Behringer **Model D** (ch 1), **Crave** (2), **CAT** (3), **WASP Deluxe** (4), **Edge** (5)
-and **Solina** (6), taken from their manuals' MIDI charts. These are analog: only the Crave has
+the Behringer **Model D** (ch 1), **Crave** (2), **CAT** (3), **WASP Deluxe** (4), **Edge** (5),
+**Solina** (6) and **2600** (7), taken from their manuals' MIDI charts. These are analog: only the Crave has
 real CCs (attack, decay, sustain, glide, tempo); the others take notes, pitch bend and, on the
 Model D and Wasp, the mod wheel. Set each synth and its HW Instrument device to the profile's
 channel (or change the channel in your own copy). Your own TOML files go in
