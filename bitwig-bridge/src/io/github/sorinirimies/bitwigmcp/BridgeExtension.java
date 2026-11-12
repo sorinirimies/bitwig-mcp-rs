@@ -62,6 +62,9 @@ public class BridgeExtension extends ControllerExtension
    static final int GRID_WIDTH = 4096;
    static final int GRID_KEYS = 128;
    static final int SETTLE_MS = 150;
+   /** Longest wait for Bitwig to show a change, and the pause after it for display texts. */
+   static final int SETTLE_MAX_MS = 2000;
+   static final int SETTLE_TEXT_MS = 40;
    static final int DEFAULT_PORT = 8417;
 
    private ControllerHost host;
@@ -444,6 +447,54 @@ public class BridgeExtension extends ControllerExtension
       later(0, reply, poll[0]);
    }
 
+   /**
+    * Runs `then` as soon as `c` holds (Bitwig reports a change a little after the call that
+    * made it), plus a short moment for display texts; after `SETTLE_MAX_MS` it runs anyway, so a
+    * change Bitwig refused still gets its reply (with the unchanged state).
+    */
+   private void settle(final Cond c, final Reply reply, final Runnable then)
+   {
+      final long deadline = System.currentTimeMillis() + SETTLE_MAX_MS;
+      final Runnable[] poll = new Runnable[1];
+      poll[0] = () -> {
+         if (c.ok())
+            later(SETTLE_TEXT_MS, reply, then);
+         else if (System.currentTimeMillis() > deadline)
+            then.run();
+         else
+            later(20, reply, poll[0]);
+      };
+      later(0, reply, poll[0]);
+   }
+
+   /** Whether every field of a `set_track` request shows in the track. */
+   private boolean trackReflects(final Addr a, final Json.Obj q)
+   {
+      final Track t = a.track;
+      if (q.has("name") && !q.str("name").equals(t.name().get()))
+         return false;
+      if (q.has("volume") && Math.abs(t.volume().value().get() - clamp01(q.num("volume"))) > 0.002)
+         return false;
+      if (q.has("pan") && Math.abs(t.pan().value().get() - clamp01(q.num("pan"))) > 0.002)
+         return false;
+      if (q.has("mute") && t.mute().get() != q.bool("mute"))
+         return false;
+      if (q.has("solo") && t.solo().get() != q.bool("solo"))
+         return false;
+      if (q.has("arm") && t.arm().get() != q.bool("arm"))
+         return false;
+      if (q.has("activated") && t.isActivated().get() != q.bool("activated"))
+         return false;
+      final SendBank sb = sendBanks.get(a.key());
+      for (final Object o : q.list("sends"))
+      {
+         final Json.Obj s = new Json.Obj(o);
+         if (sb != null && Math.abs(sb.getItemAt(s.integer("index")).value().get() - clamp01(s.num("volume"))) > 0.002)
+            return false;
+      }
+      return true;
+   }
+
    // ================================================================ dispatch
 
    private void dispatch(final String cmd, final Json.Obj q, final Reply r)
@@ -488,7 +539,7 @@ public class BridgeExtension extends ControllerExtension
          {
             final Addr a = addr(q.obj("track"));
             setTrack(a, q);
-            later(SETTLE_MS, r, () -> r.ok(trackSnapshot(a)));
+            settle(() -> trackReflects(a, q), r, () -> r.ok(trackSnapshot(a)));
             return;
          }
          case "track_action":
@@ -512,7 +563,8 @@ public class BridgeExtension extends ControllerExtension
                s.name().set(q.str("name"));
             if (q.has("color"))
                setColor(s.color(), q.list("color"));
-            later(SETTLE_MS, r, () -> r.ok(sceneSnapshot(q.integer("scene"))));
+            settle(() -> !q.has("name") || q.str("name").equals(s.name().get()), r,
+               () -> r.ok(sceneSnapshot(q.integer("scene"))));
             return;
          }
          case "scene_action":
@@ -547,8 +599,12 @@ public class BridgeExtension extends ControllerExtension
                final Parameter p = remotePage.getParameter(i);
                if (!p.exists().get())
                   throw new IllegalArgumentException("parameter " + (i + 1) + " is empty on this page");
-               p.value().setImmediately(clamp01(q.num("value")));
-               later(SETTLE_MS, r, () -> r.ok(paramSnapshot(i)));
+               final double want = clamp01(q.num("value"));
+               final double before = p.value().get();
+               p.value().setImmediately(want);
+               // a stepped parameter lands on its nearest step: any change counts
+               settle(() -> Math.abs(p.value().get() - want) < 0.002 || p.value().get() != before,
+                  r, () -> r.ok(paramSnapshot(i)));
             });
             return;
          case "device_action":
