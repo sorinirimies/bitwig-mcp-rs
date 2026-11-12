@@ -1402,18 +1402,20 @@ impl BridgeServer {
     // ------------------------------------------------------------ reading
 
     #[tool(
-        description = "Connection status: bridge address, extension and protocol version, project name."
+        description = "Connection status: server version, bridge address, extension and protocol version, project name."
     )]
     async fn status(&self) -> ToolResult {
         match self.call(Command::GetProject).await {
             Ok(snap) => out(&json!({
                 "connected": true,
+                "server_version": env!("CARGO_PKG_VERSION"),
                 "bridge": self.bridge.addr(),
                 "extension": self.bridge.hello(),
                 "project": snap["application"]["project_name"],
             })),
             Err(e) => out(&json!({
                 "connected": false,
+                "server_version": env!("CARGO_PKG_VERSION"),
                 "bridge": self.bridge.addr(),
                 "error": e.message,
             })),

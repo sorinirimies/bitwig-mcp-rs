@@ -188,6 +188,17 @@ def main [
         }
         print $"(ansi green)✓(ansi reset) Cargo.lock updated."
 
+        # The bundled Bitwig extension carries the version (BuildInfo): rebuild it so
+        # it reports the release version, not the previous one.
+        let embedded = "crates/bitwig-mcp-rs/extension/bitwig-mcp-rs.bwextension"
+        if ($embedded | path exists) {
+            if (which javac | is-empty) {
+                error make --unspanned { msg: "javac not found: the bundled extension must be rebuilt for the new version" }
+            }
+            nu scripts/bridge.nu embed
+            print $"(ansi green)✓(ansi reset) Bitwig extension rebuilt for ($new_version)."
+        }
+
         if (which git-cliff | is-not-empty) {
             ^git-cliff --output CHANGELOG.md --tag $tag
             print $"(ansi green)✓(ansi reset) CHANGELOG.md regenerated."
@@ -195,7 +206,7 @@ def main [
             print $"(ansi yellow)⚠(ansi reset) git-cliff not found — CHANGELOG.md unchanged."
         }
 
-        ^git add ...(stageable $TOUCHED (^git check-ignore ...$TOUCHED | complete | get stdout | lines)) ...$EXTRA_MANIFESTS
+        ^git add ...(stageable $TOUCHED (^git check-ignore ...$TOUCHED | complete | get stdout | lines)) ...$EXTRA_MANIFESTS crates/bitwig-mcp-rs/extension
         ^git commit -m $"chore: bump version to ($new_version)"
         ^git tag -a $tag -m $"Release ($tag)"
         print $"(ansi green)✓(ansi reset) Committed and tagged ($tag)."
