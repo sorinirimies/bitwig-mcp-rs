@@ -5,7 +5,7 @@
 [![Fuzz](https://github.com/sorinirimies/bitwig-mcp-rs/actions/workflows/fuzz.yml/badge.svg)](https://github.com/sorinirimies/bitwig-mcp-rs/actions/workflows/fuzz.yml)
 [![crates.io](https://img.shields.io/crates/v/bitwig-mcp-rs.svg)](https://crates.io/crates/bitwig-mcp-rs)
 
-Rust MCP server that controls Bitwig Studio over OSC (DrivenByMoss)
+Rust MCP server that controls Bitwig Studio: compose tracks, shape sounds, mix, record an arrangement and export audio, from any MCP client. It talks to Bitwig through its own bridge extension (or, optionally, DrivenByMoss OSC).
 
 ## Install
 
@@ -30,7 +30,7 @@ Two backends:
 | Tracks | all (64 main + 16 effect + master), by name | a window of 8, by bank position |
 | Clip notes | written and read exactly | recorded live only |
 | Devices | load by name/preset/CLAP/VST3, every remote-control page | browser stepping |
-| Tools | ~30, names or numbers, dB, replies with Bitwig's state | ~100 low-level |
+| Tools | ~55, names or numbers, dB, replies with Bitwig's state | ~100 low-level |
 
 ### 1. Install
 
@@ -65,16 +65,26 @@ for the OSC backend `--send-port` (8000), `--listen-port` (9000), `--resolution`
 
 ### What the model can do
 
-* **Read:** `get_project`, `get_meters`, `get_track`, `get_device`, `read_notes`, `status`; resources
+* **Read:** `get_project` (a summary; `detail: true` for everything), `get_meters`, `get_track`,
+  `get_device`, `read_notes`, `get_song_plan`, `status` (with the server and extension versions);
+  resources
   `bitwig://project`, `bitwig://instruments`, `bitwig://protocol`.
-* **Build:** `create_track` (kind, name, color, position and a device or preset in one call),
-  `create_scene`, `create_clip` (with exact notes: `{"note": "C3", "start": 0, "length": 0.5}`),
-  `write_notes`, `copy_clip` (a clip into other scenes, varied), `build_song` (every section of
-  the song plan in one call), `write_melody`, `insert_chain`, `create_return`, `master_chain`,
-  `record_arrangement`, `record_automation`, `insert_device`.
-* **Mix and play:** `set_track` (volume or `volume_db`, pan, mute, solo, arm, sends),
-  `set_device_param` (by parameter name), `set_device_params` (several at once), `transport`, `set_transport`, `clip_action`,
-  `scene_action`.
+* **Compose:** `create_track` (kind, name, color, position and a device or preset in one call),
+  `create_scene`, `create_clip` (exact notes: `{"note": "C3", "start": 0, "length": 0.5}`),
+  `write_notes`, and generators in a key: `write_chords`, `write_bassline`, `write_arp`,
+  `write_drums`, `write_melody` (a motif with contour and variation; another `seed` is another
+  hook). `copy_clip` puts a clip into other scenes, each copy varied; `transform_clip`
+  transposes, thins, humanizes, …; `build_song` builds every section of the song plan
+  (`set_song_plan`) in one call.
+* **Sound:** `insert_device`, `insert_chain`, `create_return` (a reverb or delay bus with its
+  sends), `build_drum_kit` (also effects on single pads, e.g. a gated snare), `list_devices`,
+  `set_device_param` and `set_device_params` (by name, several at once).
+* **Mix and master:** `set_track` (volume or `volume_db`, pan, mute, solo, arm, sends),
+  `get_meters`, `master_chain` (EQ-5, Compressor, Peak Limiter), `capture_audio` (records the
+  output and reports LUFS and true peak).
+* **Play and arrange:** `transport`, `set_transport`, `clip_action`, `scene_action`,
+  `play_notes`, `record_clip`, `record_arrangement` (the scenes in order into the arranger),
+  `record_automation` (a sweep or riser); `export_midi`, `save_project`.
 * **Everything else:** `list_actions` + `invoke_action` reach every Bitwig menu command
   (save, export, group, consolidate, …); `history` undoes.
 * **Prompts:** `sketch_song`, `mix_check`, `setup_hardware_synth`.
@@ -103,8 +113,8 @@ synth's MIDI port as the **MIDI output of the MCP bridge controller** in Bitwig'
 ### Limits
 
 The bridge sees the first 64 main tracks, 16 effect tracks, 64 scenes and 16 devices per
-track. Clips are launcher clips (the Bitwig API cannot place clips in the arrangement; record
-the launcher into the arranger). Editing a clip or device moves Bitwig's selection to it.
+track. Clips are launcher clips (the Bitwig API cannot place clips in the arrangement; use
+`record_arrangement` to record the launcher into the arranger). Editing a clip or device moves Bitwig's selection to it.
 The JSON protocol between server and extension is in `bitwig-bridge/protocol.schema.json`
 (generated from `src/bridge/protocol.rs`; `just schema`).
 
@@ -121,8 +131,9 @@ just check-all    # the quality gate: fmt, clippy, tests, versions, nu tests
 just fuzz-all     # every cargo-fuzz target (nightly)
 just audit deny   # supply chain
 just update-deps  # cargo update (+ fuzz/) → gate → commit → push
-just release 0.2.0       # bump, changelog, tag, push → Release workflow
-just release-all 0.2.0   # … to GitHub and Gitea
+just bump 0.3.0          # bump, rebuild the bundled extension, changelog, commit, tag
+just release 0.3.0       # … and push → Release workflow
+just release-all 0.3.0   # … to GitHub and Gitea
 ```
 
 Layout:
