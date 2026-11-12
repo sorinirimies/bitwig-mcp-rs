@@ -96,6 +96,8 @@ pub struct ProjectView {
     pub tracks: Vec<TrackView>,
     /// Effect tracks.
     pub effect_tracks: Vec<TrackView>,
+    /// The master track.
+    pub master: TrackView,
     /// Scenes.
     pub scenes: Vec<SceneView>,
 }
@@ -204,13 +206,13 @@ impl ProjectView {
         }
     }
 
-    /// The view of a resolved track (master has none).
+    /// The view of a resolved track.
     #[must_use]
     pub fn track_view(&self, addr: TrackAddr) -> Option<&TrackView> {
         let list = match addr.bank {
             TrackBank::Main => &self.tracks,
             TrackBank::Effect => &self.effect_tracks,
-            TrackBank::Master => return None,
+            TrackBank::Master => return Some(&self.master),
         };
         list.iter().find(|t| t.index == addr.index)
     }

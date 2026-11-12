@@ -286,6 +286,58 @@ pub struct SetParamsArgs {
     pub params: Vec<ParamSetting>,
 }
 
+/// One device of a chain.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ChainDevice {
+    /// Bitwig device or plugin name, e.g. "EQ-5", "Compressor".
+    pub name: Option<String>,
+    /// Preset name instead of a bare device.
+    pub preset: Option<String>,
+    /// Parameters to set after loading (by name or number, optionally per page).
+    #[serde(default)]
+    pub params: Vec<ParamSetting>,
+}
+
+/// A chain of devices on a track.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct InsertChainArgs {
+    /// Track name or 1-based number; "master"; "fx N".
+    pub track: Ref,
+    /// The devices, loaded in this order at the end of the chain.
+    pub devices: Vec<ChainDevice>,
+}
+
+/// A send from one track to a new effect track.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReturnSend {
+    /// Source track name or 1-based number.
+    pub track: Ref,
+    /// Send level in dB.
+    pub volume_db: f64,
+}
+
+/// A new effect (return) track.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateReturnArgs {
+    /// Name of the return, e.g. "Reverb"; sends use it.
+    pub name: String,
+    /// Devices of the chain, in order, e.g. [{"name": "Reverb", "params": [...]}].
+    #[serde(default)]
+    pub devices: Vec<ChainDevice>,
+    /// "#rrggbb" or a color name.
+    pub color: Option<String>,
+    /// Tracks to send into it, with levels.
+    #[serde(default)]
+    pub sends: Vec<ReturnSend>,
+}
+
+/// The master chain.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct MasterChainArgs {
+    /// Devices instead of the default [EQ-5, Compressor, Peak Limiter].
+    pub devices: Option<Vec<ChainDevice>>,
+}
+
 /// A track.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct TrackArgs {
@@ -827,6 +879,41 @@ pub struct WriteArpArgs {
     pub seed: Option<u64>,
 }
 
+/// Melody.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WriteMelodyArgs {
+    /// Track, slot, clip name, mode.
+    #[serde(flatten)]
+    pub target: Target,
+    /// Key, e.g. "A minor"; the melody stays in it.
+    pub key: String,
+    /// The chords underneath: symbols or Roman numerals in the key. Notes on a chord change
+    /// are chord tones.
+    pub progression: String,
+    /// Beats each chord lasts (default 4).
+    pub beats_per_chord: Option<f64>,
+    /// Bitwig octave of the lowest note (default 4).
+    pub octave: Option<i32>,
+    /// Octaves the melody spans, 1-3 (default 1).
+    pub span: Option<u8>,
+    /// arch (default), rise, fall, wave or flat: the shape of the motif.
+    pub contour: Option<theory::Contour>,
+    /// How busy it is, 0-1 (default 0.6).
+    pub density: Option<f64>,
+    /// Smallest step: "1/8" (default), "1/16", "1/8T"...
+    pub rate: Option<String>,
+    /// Length of the motif in beats (default 4); it repeats through the clip.
+    pub motif_beats: Option<f64>,
+    /// Rhythm of the motif as steps ("x.x.xx.." ; x hit, . rest), instead of density.
+    pub rhythm: Option<String>,
+    /// How much each repetition changes, 0-1 (default 0.3; 0 = exact repeats).
+    pub variation: Option<f64>,
+    /// Velocity (default 95).
+    pub velocity: Option<u8>,
+    /// Seed (default 1); another seed is another hook.
+    pub seed: Option<u64>,
+}
+
 /// One Euclidean voice.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct EuclidArg {
@@ -933,8 +1020,8 @@ pub struct SongPlanArgs {
 pub struct BuildSongArgs {
     /// Sections to build: [{"name": "Verse", "scene": "Verse", "parts": [{"kind": "chords",
     /// "track": "Pad", "progression": "i VI III VII"}, ...]}]. A part is a write_drums,
-    /// write_bassline, write_chords, write_arp, create_clip or copy_clip call: `kind` is drums,
-    /// bass, chords, arp, clip or copy, the other fields are that tool's arguments. `slot`
+    /// write_bassline, write_chords, write_arp, write_melody, create_clip or copy_clip call:
+    /// `kind` is drums, bass, chords, arp, melody, clip or copy, the other fields are that tool's arguments. `slot`
     /// defaults to the section's `scene` (else its `name`), `key` to the song plan's key.
     /// Default: the `sections` of the stored song plan.
     pub sections: Option<Vec<Json>>,
@@ -1077,6 +1164,58 @@ impl BridgeServer {
             .map_err(err)
     }
 
+    /// Loads devices at the end of a track's chain and sets their parameters; a failing device
+    /// is reported, the rest load.
+    async fn load_chain(&self, track: &Ref, devices: &[ChainDevice]) -> Result<Json, McpError> {
+        let mut report = Vec::new();
+        for d in devices {
+            let label = d
+                .name
+                .clone()
+                .or_else(|| d.preset.clone())
+                .unwrap_or_default();
+            let inserted = self
+                .insert_device(Parameters(InsertDeviceArgs {
+                    track: track.clone(),
+                    name: d.name.clone(),
+                    preset: d.preset.clone(),
+                    clap_id: None,
+                    vst3_id: None,
+                    file: None,
+                    at: None,
+                    relative_to: None,
+                }))
+                .await;
+            if let Err(e) = inserted {
+                report.push(json!({"device": label, "error": e.message}));
+                continue;
+            }
+            let mut set = Vec::new();
+            if !d.params.is_empty() {
+                // the new device is the last of the chain
+                let view = self.view().await?;
+                let addr = view.track(track).map_err(bad)?;
+                let n = view.track_view(addr).map_or(0, |t| t.devices.len() as u32);
+                if n == 0 {
+                    report
+                        .push(json!({"device": label, "error": "device not found after loading"}));
+                    continue;
+                }
+                for p in &d.params {
+                    let r = self
+                        .set_param(addr, n - 1, p.page.as_ref(), &p.param, p.value)
+                        .await;
+                    set.push(match r {
+                        Ok(v) => v,
+                        Err(e) => json!({"param": p.param, "error": e.message}),
+                    });
+                }
+            }
+            report.push(json!({"device": label, "ok": true, "params": set}));
+        }
+        Ok(json!({"devices": report}))
+    }
+
     /// Runs one `build_song` part: the tool named by `kind`, with `args` as its arguments.
     async fn build_part(&self, kind: &str, args: Json) -> ToolResult {
         fn parse<T: serde::de::DeserializeOwned>(kind: &str, v: Json) -> Result<T, McpError> {
@@ -1087,10 +1226,11 @@ impl BridgeServer {
             "bass" => self.write_bassline(Parameters(parse(kind, args)?)).await,
             "chords" => self.write_chords(Parameters(parse(kind, args)?)).await,
             "arp" => self.write_arp(Parameters(parse(kind, args)?)).await,
+            "melody" => self.write_melody(Parameters(parse(kind, args)?)).await,
             "clip" => self.create_clip(Parameters(parse(kind, args)?)).await,
             "copy" => self.copy_clip(Parameters(parse(kind, args)?)).await,
             other => Err(bad(format!(
-                "part kind {other:?} must be drums, bass, chords, arp, clip or copy"
+                "part kind {other:?} must be drums, bass, chords, arp, melody, clip or copy"
             ))),
         }
     }
@@ -2101,6 +2241,89 @@ impl BridgeServer {
     }
 
     #[tool(
+        description = "Load a chain of devices onto a track in one call, in order, each with optional parameters (by name), e.g. a master chain or a vocal chain. Reports every device; a failing device is reported and the rest still load."
+    )]
+    async fn insert_chain(&self, Parameters(a): Parameters<InsertChainArgs>) -> ToolResult {
+        if a.devices.is_empty() {
+            return Err(bad("devices is empty"));
+        }
+        out(&self.load_chain(&a.track, &a.devices).await?)
+    }
+
+    #[tool(
+        description = "Create an effect (return) track with a device chain and send levels in one call, e.g. a reverb bus: name \"Reverb\", devices [{\"name\": \"Reverb\"}], sends [{track: \"Pad\", volume_db: -12}]."
+    )]
+    async fn create_return(&self, Parameters(a): Parameters<CreateReturnArgs>) -> ToolResult {
+        let created = self
+            .create_track(Parameters(CreateTrackArgs {
+                kind: TrackKind::Effect,
+                name: Some(a.name.clone()),
+                color: a.color,
+                position: None,
+                device: None,
+                preset: None,
+            }))
+            .await?;
+        let chain = if a.devices.is_empty() {
+            Json::Null
+        } else {
+            self.load_chain(&Ref::Name(a.name.clone()), &a.devices)
+                .await?
+        };
+        let mut sends = Vec::new();
+        for s in &a.sends {
+            let r = self
+                .set_track(Parameters(SetTrackArgs {
+                    track: s.track.clone(),
+                    name: None,
+                    color: None,
+                    volume: None,
+                    volume_db: None,
+                    pan: None,
+                    mute: None,
+                    solo: None,
+                    arm: None,
+                    activated: None,
+                    monitor: None,
+                    sends: vec![SendArg {
+                        send: Ref::Name(a.name.clone()),
+                        volume: None,
+                        volume_db: Some(s.volume_db),
+                    }],
+                }))
+                .await;
+            sends.push(match r {
+                Ok(_) => json!({"track": s.track, "volume_db": s.volume_db, "ok": true}),
+                Err(e) => json!({"track": s.track, "error": e.message}),
+            });
+        }
+        out(&json!({
+            "created": serde_json::from_str::<Json>(&created).unwrap_or(Json::Null),
+            "chain": chain,
+            "sends": sends,
+        }))
+    }
+
+    #[tool(
+        description = "Put a mastering chain on the master track: EQ-5, Compressor and Peak Limiter by default (or your devices). Then measure with capture_audio (LUFS, true peak), adjust with set_device_params, and measure again."
+    )]
+    async fn master_chain(&self, Parameters(a): Parameters<MasterChainArgs>) -> ToolResult {
+        let devices = a.devices.unwrap_or_else(|| {
+            ["EQ-5", "Compressor", "Peak Limiter"]
+                .into_iter()
+                .map(|n| ChainDevice {
+                    name: Some(n.into()),
+                    preset: None,
+                    params: Vec::new(),
+                })
+                .collect()
+        });
+        out(&self
+            .load_chain(&Ref::Name("master".into()), &devices)
+            .await?)
+    }
+
+    #[tool(
         description = "Device action: enable, disable, toggle, delete, duplicate, open_window, close_window, next_preset, previous_preset, select."
     )]
     async fn device_action(&self, Parameters(a): Parameters<DeviceActionArgs>) -> ToolResult {
@@ -2354,7 +2577,43 @@ impl BridgeServer {
     }
 
     #[tool(
-        description = "Build a song from its plan in one call: for every section, run its parts (drums, bass, chords, arp, clip, copy) into the section's scene. Uses the sections of the stored song plan unless given. Each part is a write_* / create_clip / copy_clip call; a failing part is reported and the rest still run. Create the tracks and scenes first."
+        description = "Write a melodic hook in a key over a chord progression: a short motif (rhythm + contour: arch, rise, fall, wave, flat) repeated through the clip with small variations, mostly stepwise, landing on chord tones at chord changes and at the end. Tune density, rate, span, variation; the seed gives other hooks. Run it again with another seed or transform_clip for alternatives."
+    )]
+    async fn write_melody(&self, Parameters(a): Parameters<WriteMelodyArgs>) -> ToolResult {
+        let scale = theory::Scale::parse(&a.key).map_err(bad)?;
+        let chords = chords_of(Some(&a.key), &a.progression)?;
+        let per = beats_of(a.beats_per_chord)?;
+        let rate = parse_step(a.rate.as_deref(), 0.5)?;
+        let motif = a.motif_beats.unwrap_or(4.0);
+        if !(motif.is_finite() && (0.5..=32.0).contains(&motif)) {
+            return Err(bad("motif_beats must be 0.5-32"));
+        }
+        let rhythm = a
+            .rhythm
+            .as_deref()
+            .map(theory::steps)
+            .transpose()
+            .map_err(bad)?;
+        let spec = theory::MelodySpec {
+            beats_per_chord: per,
+            octave: a.octave.unwrap_or(4).clamp(-2, 8),
+            span: a.span.unwrap_or(1).clamp(1, 3),
+            contour: a.contour.unwrap_or_default(),
+            density: a.density.unwrap_or(0.6).clamp(0.05, 1.0),
+            rate,
+            motif_beats: motif,
+            rhythm,
+            variation: a.variation.unwrap_or(0.3).clamp(0.0, 1.0),
+            velocity: a.velocity.unwrap_or(95),
+            seed: a.seed.unwrap_or(1),
+        };
+        let notes = theory::melody(&scale, &chords, &spec);
+        self.put_notes(&a.target, notes, per * chords.len() as f64)
+            .await
+    }
+
+    #[tool(
+        description = "Build a song from its plan in one call: for every section, run its parts (drums, bass, chords, arp, melody, clip, copy) into the section's scene. Uses the sections of the stored song plan unless given. Each part is a write_* / create_clip / copy_clip call; a failing part is reported and the rest still run. Create the tracks and scenes first."
     )]
     async fn build_song(&self, Parameters(a): Parameters<BuildSongArgs>) -> ToolResult {
         let plan: Json = match &a.sections {
@@ -2391,9 +2650,10 @@ impl BridgeServer {
                     if kind != "copy" && !scene.is_empty() {
                         o.entry("slot").or_insert_with(|| json!(scene));
                     }
-                    if let (Some(k), true) =
-                        (&key, matches!(kind.as_str(), "bass" | "chords" | "arp"))
-                    {
+                    if let (Some(k), true) = (
+                        &key,
+                        matches!(kind.as_str(), "bass" | "chords" | "arp" | "melody"),
+                    ) {
                         o.entry("key").or_insert_with(|| json!(k));
                     }
                 }
@@ -3453,6 +3713,121 @@ mod tests {
         );
         assert_eq!(sent(&log, "write_notes").len(), 2);
         assert!(r.contains("ufo"), "{r}");
+    }
+
+    #[tokio::test]
+    async fn write_melody_writes_notes_in_the_key() {
+        let (s, log) = rig().await;
+        let r = s
+            .write_melody(Parameters(WriteMelodyArgs {
+                target: Target {
+                    track: Ref::Name("synth".into()),
+                    slot: Ref::Name("verse".into()),
+                    name: Some("hook".into()),
+                    mode: None,
+                },
+                key: "A minor".into(),
+                progression: "i VI III VII".into(),
+                beats_per_chord: None,
+                octave: None,
+                span: None,
+                contour: None,
+                density: None,
+                rate: None,
+                motif_beats: None,
+                rhythm: None,
+                variation: None,
+                velocity: None,
+                seed: None,
+            }))
+            .await
+            .expect("tool");
+        assert!(r.contains("\"new_clip\":true"), "{r}");
+        assert_eq!(sent(&log, "create_clip")[0]["length"], 16);
+        let scale = theory::Scale::parse("A minor").expect("key");
+        let w = &sent(&log, "write_notes")[0];
+        let notes = w["notes"].as_array().expect("notes");
+        assert!(notes.len() >= 8);
+        assert!(
+            notes
+                .iter()
+                .all(|n| scale.contains(n["key"].as_u64().expect("key") as u8))
+        );
+    }
+
+    #[tokio::test]
+    async fn insert_chain_loads_devices_in_order_and_sets_params() {
+        let (s, log) = rig().await;
+        let r = s
+            .insert_chain(Parameters(InsertChainArgs {
+                track: Ref::Name("synth".into()),
+                devices: vec![
+                    ChainDevice {
+                        name: Some("EQ-5".into()),
+                        preset: None,
+                        params: Vec::new(),
+                    },
+                    ChainDevice {
+                        name: Some("Peak Limiter".into()),
+                        preset: None,
+                        params: vec![ParamSetting {
+                            page: None,
+                            param: Ref::Number(1),
+                            value: 0.5,
+                        }],
+                    },
+                ],
+            }))
+            .await
+            .expect("tool");
+        assert!(!r.contains("error"), "{r}");
+        let ins = sent(&log, "insert_device");
+        assert_eq!(ins.len(), 2);
+        assert_eq!(ins[0]["source"]["name"], "EQ-5");
+        assert_eq!(ins[1]["source"]["name"], "Peak Limiter");
+        assert_eq!(sent(&log, "set_device_param").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn master_chain_defaults_to_eq_compressor_limiter() {
+        let (s, log) = rig().await;
+        s.master_chain(Parameters(MasterChainArgs::default()))
+            .await
+            .expect("tool");
+        let names: Vec<_> = sent(&log, "insert_device")
+            .iter()
+            .map(|r| r["source"]["name"].as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(names, ["EQ-5", "Compressor", "Peak Limiter"]);
+    }
+
+    #[tokio::test]
+    async fn create_return_makes_an_effect_track_and_sets_the_sends() {
+        let (s, log) = rig().await;
+        let r = s
+            .create_return(Parameters(CreateReturnArgs {
+                name: "Reverb".into(),
+                devices: vec![ChainDevice {
+                    name: Some("Reverb".into()),
+                    preset: None,
+                    params: Vec::new(),
+                }],
+                color: None,
+                sends: vec![ReturnSend {
+                    track: Ref::Name("drums".into()),
+                    volume_db: -12.0,
+                }],
+            }))
+            .await
+            .expect("tool");
+        assert!(r.contains("\"ok\":true"), "{r}");
+        assert_eq!(sent(&log, "create_track")[0]["kind"], "effect");
+        assert_eq!(sent(&log, "insert_device").len(), 1);
+        assert!(
+            sent(&log, "set_track")
+                .iter()
+                .any(|r| r["sends"][0]["volume"].is_number()),
+        );
     }
 
     #[tokio::test]

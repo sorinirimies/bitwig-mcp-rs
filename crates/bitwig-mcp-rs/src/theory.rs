@@ -744,6 +744,179 @@ pub fn drums(voices: &[(u8, Vec<Step>)], step_beats: f64, length: f64, velocity:
     out
 }
 
+// ================================================================ melody
+
+/// The overall shape of a melodic phrase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Contour {
+    /// Rises to a peak in the middle, then falls (default).
+    #[default]
+    Arch,
+    /// Climbs from low to high.
+    Rise,
+    /// Falls from high to low.
+    Fall,
+    /// Up, down, up: a wave.
+    Wave,
+    /// Stays around the middle.
+    Flat,
+}
+
+impl Contour {
+    /// Target height 0-1 at phrase position `t` (0-1).
+    fn height(self, t: f64) -> f64 {
+        match self {
+            Self::Arch => 1.0 - (2.0 * t - 1.0).abs(),
+            Self::Rise => t,
+            Self::Fall => 1.0 - t,
+            Self::Wave => 0.5 + 0.5 * (t * std::f64::consts::TAU).sin(),
+            Self::Flat => 0.5,
+        }
+    }
+}
+
+/// What shapes a melody; see `write_melody`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MelodySpec {
+    /// Beats each chord lasts.
+    pub beats_per_chord: f64,
+    /// Bitwig octave of the lowest notes.
+    pub octave: i32,
+    /// Octaves the melody spans (1-3).
+    pub span: u8,
+    /// Phrase shape.
+    pub contour: Contour,
+    /// Hits per step, 0-1.
+    pub density: f64,
+    /// Smallest step in beats.
+    pub rate: f64,
+    /// The motif's length in beats; it repeats to fill the clip.
+    pub motif_beats: f64,
+    /// Rhythm of the motif as steps (overrides density).
+    pub rhythm: Option<Vec<Step>>,
+    /// How much each repetition changes, 0-1.
+    pub variation: f64,
+    /// Velocity.
+    pub velocity: u8,
+    /// Seed.
+    pub seed: u64,
+}
+
+/// One motif event: step in the motif, scale-pool index, length in steps.
+type MotifNote = (usize, usize, usize);
+
+/// A melody in `scale` over `chords`: a short motif (a rhythm and a contour) repeated through
+/// the clip with small changes. Notes on a chord change and the last note are chord tones; all
+/// others are scale notes, moving mostly by step.
+#[must_use]
+pub fn melody(scale: &Scale, chords: &[Chord], spec: &MelodySpec) -> Vec<Note> {
+    let mut rng = Rng::new(spec.seed);
+    let total = spec.beats_per_chord * chords.len() as f64;
+    let step = spec.rate.max(0.0625);
+    let motif_steps = ((spec.motif_beats / step).round() as usize).max(2);
+    let low = note_in(scale.root, spec.octave);
+    let high = low + 12 * i32::from(spec.span.clamp(1, 3));
+    let pool: Vec<i32> = (low..=high)
+        .filter(|n| scale.contains(clamp_note(*n)))
+        .collect();
+    if pool.is_empty() || chords.is_empty() {
+        return Vec::new();
+    }
+    let chord_tone = |chord: &Chord, idx: usize| -> usize {
+        // nearest pool index to `idx` whose pitch is in the chord
+        let pcs: Vec<i32> = chord
+            .intervals
+            .iter()
+            .map(|i| (i32::from(chord.root) + i32::from(*i)).rem_euclid(12))
+            .collect();
+        (0..pool.len())
+            .filter(|k| pcs.contains(&pool[*k].rem_euclid(12)))
+            .min_by_key(|k| k.abs_diff(idx))
+            .unwrap_or(idx)
+    };
+
+    // rhythm of the motif: hit positions with lengths in steps
+    let mut hit_steps: Vec<usize> = match &spec.rhythm {
+        Some(pattern) => pattern
+            .iter()
+            .take(motif_steps)
+            .enumerate()
+            .filter(|(_, st)| !matches!(st, Step::Rest | Step::Tie))
+            .map(|(i, _)| i)
+            .collect(),
+        None => (0..motif_steps)
+            .filter(|i| {
+                let strong = i % 4 == 0;
+                *i == 0
+                    || rng.signed().mul_add(0.5, 0.5)
+                        < spec.density * if strong { 1.3 } else { 0.9 }
+            })
+            .collect(),
+    };
+    if hit_steps.len() < 2 {
+        hit_steps = vec![0, motif_steps / 2];
+    }
+
+    // pitches of the motif: follow the contour, mostly by step
+    let first = chord_tone(&chords[0], pool.len() / 3);
+    let mut prev = first;
+    let motif: Vec<MotifNote> = hit_steps
+        .iter()
+        .enumerate()
+        .map(|(k, st)| {
+            let t = k as f64 / (hit_steps.len().max(2) - 1) as f64;
+            let target = (spec.contour.height(t) * (pool.len() - 1) as f64).round() as i64;
+            let toward = (target - prev as i64).clamp(-2, 2);
+            let wobble = rng.below(3) as i64 - 1;
+            let idx = (prev as i64 + toward + wobble).clamp(0, pool.len() as i64 - 1) as usize;
+            prev = idx;
+            let next = hit_steps.get(k + 1).copied().unwrap_or(motif_steps);
+            (*st, if k == 0 { first } else { idx }, next - st)
+        })
+        .collect();
+
+    // repeat through the clip, varying; the first note of each chord is a chord tone
+    let reps = (total / spec.motif_beats).ceil().max(1.0) as usize;
+    let mut out = Vec::new();
+    for rep in 0..reps {
+        let mut m = motif.clone();
+        if rep > 0 && spec.variation > 0.0 {
+            let changes = ((m.len() as f64) * spec.variation).round().max(1.0) as usize;
+            for _ in 0..changes {
+                let k = 1 + rng.below(m.len().saturating_sub(1).max(1));
+                if let Some(n) = m.get_mut(k) {
+                    let delta = if rng.below(2) == 0 { -1 } else { 1 } * (1 + rng.below(2) as i64);
+                    n.1 = (n.1 as i64 + delta).clamp(0, pool.len() as i64 - 1) as usize;
+                }
+            }
+        }
+        let last_rep = rep + 1 == reps;
+        let count = m.len();
+        for (k, (st, idx, len)) in m.into_iter().enumerate() {
+            let start = rep as f64 * spec.motif_beats + st as f64 * step;
+            if start >= total {
+                continue;
+            }
+            let chord = &chords[((start / spec.beats_per_chord) as usize).min(chords.len() - 1)];
+            let on_chord_start = start % spec.beats_per_chord < step * 0.99;
+            let idx = if on_chord_start || (last_rep && k + 1 == count) {
+                chord_tone(chord, idx)
+            } else {
+                idx
+            };
+            let end = (start + len as f64 * step * 0.9).min(total);
+            out.push(Note {
+                note: clamp_note(pool[idx]),
+                start_beats: start,
+                length_beats: (end - start).max(step * 0.25),
+                velocity: accented(spec.velocity, st % 4 == 0),
+            });
+        }
+    }
+    out
+}
+
 // ================================================================ transforms
 
 /// A change to existing notes.
@@ -931,6 +1104,73 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+    fn melody_spec() -> MelodySpec {
+        MelodySpec {
+            beats_per_chord: 4.0,
+            octave: 3,
+            span: 1,
+            contour: Contour::Arch,
+            density: 0.6,
+            rate: 0.5,
+            motif_beats: 4.0,
+            rhythm: None,
+            variation: 0.3,
+            velocity: 90,
+            seed: 7,
+        }
+    }
+
+    #[test]
+    fn melody_stays_in_key_starts_on_chord_tones_and_is_repeatable() {
+        let scale = Scale::parse("A minor").expect("key");
+        let chords = progression("i VI III VII", Some(&scale)).expect("chords");
+        let a = melody(&scale, &chords, &melody_spec());
+        assert!(a.len() >= 8, "{}", a.len());
+        assert!(a.iter().all(|n| scale.contains(n.note)));
+        assert!(a.iter().all(|n| n.start_beats < 16.0));
+        // first note of each chord is a chord tone
+        for (i, chord) in chords.iter().enumerate() {
+            let at = i as f64 * 4.0;
+            let first = a.iter().find(|n| n.start_beats >= at).expect("note");
+            let pcs: Vec<i32> = chord
+                .intervals
+                .iter()
+                .map(|x| (i32::from(chord.root) + i32::from(*x)).rem_euclid(12))
+                .collect();
+            if first.start_beats < at + 0.5 {
+                assert!(
+                    pcs.contains(&(i32::from(first.note) % 12)),
+                    "{chord:?} {first:?}"
+                );
+            }
+        }
+        assert_eq!(
+            a,
+            melody(&scale, &chords, &melody_spec()),
+            "same seed, same melody"
+        );
+        let mut other = melody_spec();
+        other.seed = 8;
+        assert_ne!(a, melody(&scale, &chords, &other));
+    }
+
+    #[test]
+    fn melody_repeats_its_rhythm_with_variation() {
+        let scale = Scale::parse("C major").expect("key");
+        let chords = progression("C", Some(&scale)).expect("chords");
+        let mut spec = melody_spec();
+        spec.beats_per_chord = 16.0;
+        let a = melody(&scale, &chords, &spec);
+        let starts = |from: f64| -> Vec<f64> {
+            a.iter()
+                .filter(|n| n.start_beats >= from && n.start_beats < from + 4.0)
+                .map(|n| n.start_beats - from)
+                .collect()
+        };
+        assert_eq!(starts(0.0), starts(4.0));
+        assert_eq!(starts(0.0), starts(8.0));
+    }
+
     use super::*;
 
     fn pcs(notes: &[u8]) -> Vec<u8> {
