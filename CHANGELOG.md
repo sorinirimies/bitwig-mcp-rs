@@ -4,6 +4,12 @@ All notable changes to this project are documented here. It is generated from
 [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org) — do not edit it by hand.
 
+## [0.2.1](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.2.0...v0.2.1) — 2026-11-12
+
+### 🧪 Tests
+
+- Live test for composing, chains, meters and recording ([`d009ed5`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/d009ed5849e10df507298b46a1d393309a0f0744))
+
 ## [0.2.0](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.1.2...v0.2.0) — 2026-11-12
 
 ### ✨ Features
