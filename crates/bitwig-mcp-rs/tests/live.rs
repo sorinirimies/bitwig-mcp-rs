@@ -81,6 +81,22 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // Runs on failure too: remove what the test created, ignoring errors.
+        if std::thread::panicking() {
+            for (name, args) in [
+                ("scene_action", json!({"scene": NAME, "action": "delete"})),
+                ("track_action", json!({"track": NAME, "action": "delete"})),
+            ] {
+                let id = self.next;
+                self.next += 1;
+                let msg = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                                 "params": {"name": name, "arguments": args}});
+                if writeln!(self.stdin, "{msg}").is_ok() {
+                    let mut line = String::new();
+                    let _ = self.stdout.read_line(&mut line);
+                }
+            }
+        }
         let _ = self.child.kill();
     }
 }

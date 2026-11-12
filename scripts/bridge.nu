@@ -138,10 +138,13 @@ def "main test" []: nothing -> nothing {
     mkdir $out
     let sources = [
         ($r | path join "bitwig-bridge" "src" $PKG "Json.java")
+        ($r | path join "bitwig-bridge" "src" $PKG "Server.java")
         ($r | path join "bitwig-bridge" "test" $PKG "JsonTest.java")
+        ($r | path join "bitwig-bridge" "test" $PKG "ServerTest.java")
     ]
     ^javac --release 17 -Xlint:all -Werror -encoding UTF-8 -d $out ...$sources
     ^java -ea -cp $out io.github.sorinirimies.bitwigmcp.JsonTest
+    ^java -ea -cp $out io.github.sorinirimies.bitwigmcp.ServerTest
 }
 
 # The sources hash stamped into a built extension.

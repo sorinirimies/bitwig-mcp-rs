@@ -1,6 +1,5 @@
 package io.github.sorinirimies.bitwigmcp;
 
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -31,8 +30,6 @@ import com.bitwig.extension.controller.api.PinnableCursorClip;
 import com.bitwig.extension.controller.api.PinnableCursorDevice;
 import com.bitwig.extension.controller.api.PopupBrowser;
 import com.bitwig.extension.controller.api.Project;
-import com.bitwig.extension.controller.api.RemoteConnection;
-import com.bitwig.extension.controller.api.RemoteSocket;
 import com.bitwig.extension.controller.api.Scene;
 import com.bitwig.extension.controller.api.SceneBank;
 import com.bitwig.extension.controller.api.Send;
@@ -83,6 +80,12 @@ public class BridgeExtension extends ControllerExtension
    private PopupBrowser browser;
    private BrowserResultsItemBank results;
    private com.bitwig.extension.controller.api.MidiOut sysexOut;
+   /** Send and clip-slot banks by "bank:index"; effect tracks and the master have none. */
+   private final Map<String, SendBank> sendBanks = new HashMap<>();
+   private final Map<String, ClipLauncherSlotBank> slotBanks = new HashMap<>();
+   private final boolean withSysex;
+   private Server server;
+   private volatile boolean running;
    private DeviceBank[] mainDevices;
    private DeviceBank[] fxDevices;
    private DeviceBank masterDevices;
@@ -98,6 +101,7 @@ public class BridgeExtension extends ControllerExtension
    protected BridgeExtension(final BridgeExtensionDefinition definition, final ControllerHost host)
    {
       super(definition, host);
+      this.withSysex = definition.getNumMidiOutPorts() > 0;
    }
 
    // ================================================================ setup
@@ -135,7 +139,7 @@ public class BridgeExtension extends ControllerExtension
       for (int i = 0; i < TRACKS; i++)
       {
          final Track t = mainBank.getItemAt(i);
-         observeTrack(t);
+         observeTrack("main:" + i, t);
          mainDevices[i] = observeDevices(t);
          mainSelected[i] = cursorTrack.createEqualsValue(t);
          mark(mainSelected[i]);
@@ -145,12 +149,12 @@ public class BridgeExtension extends ControllerExtension
       for (int i = 0; i < FX_TRACKS; i++)
       {
          final Track t = fxBank.getItemAt(i);
-         observeTrack(t);
+         observeTrack("effect:" + i, t);
          fxDevices[i] = observeDevices(t);
          fxSelected[i] = cursorTrack.createEqualsValue(t);
          mark(fxSelected[i]);
       }
-      observeTrack(master);
+      observeTrack("master:0", master);
       masterDevices = observeDevices(master);
       masterSelected = cursorTrack.createEqualsValue(master);
       mark(masterSelected);
@@ -198,7 +202,7 @@ public class BridgeExtension extends ControllerExtension
       });
 
       browser = host.createPopupBrowser();
-      sysexOut = host.getMidiOutPort(0);
+      sysexOut = withSysex ? host.getMidiOutPort(0) : null;
       mark(browser.exists(), browser.contentTypeNames(), browser.selectedContentTypeIndex());
       results = browser.resultsColumn().createItemBank(RESULTS);
       mark(results.itemCount(), results.scrollPosition(), results.canScrollForwards());
@@ -212,11 +216,21 @@ public class BridgeExtension extends ControllerExtension
          .getNumberSetting("TCP port (restart Bitwig after changing)", "Connection", 1024, 65535,
             1, "", DEFAULT_PORT)
          .getRaw());
-      final RemoteSocket socket = host.createRemoteConnection("bitwig-mcp-rs bridge", port);
-      socket.setClientConnectCallback(this::onConnect);
+      try
+      {
+         server = new Server(port, msg -> host.errorln("bitwig-mcp-rs bridge: " + msg));
+      }
+      catch (final java.io.IOException e)
+      {
+         host.errorln("bitwig-mcp-rs bridge: cannot listen on 127.0.0.1:" + port + ": " + e);
+         host.showPopupNotification("MCP bridge: port " + port + " is in use");
+         return;
+      }
+      running = true;
+      pump();
       host.println("bitwig-mcp-rs bridge " + BridgeExtensionDefinition.VERSION
-         + " listening on port " + socket.getPort());
-      host.showPopupNotification("MCP bridge on port " + socket.getPort());
+         + " listening on 127.0.0.1:" + server.port());
+      host.showPopupNotification("MCP bridge on port " + server.port());
    }
 
    private static void mark(final Object... values)
@@ -228,24 +242,45 @@ public class BridgeExtension extends ControllerExtension
       }
    }
 
-   private void observeTrack(final Track t)
+   /** Bitwig throws for features a track kind lacks (sends on effect tracks, ...). */
+   private static <T> T optional(final java.util.function.Supplier<T> get)
+   {
+      try
+      {
+         return get.get();
+      }
+      catch (final RuntimeException e)
+      {
+         return null;
+      }
+   }
+
+   private void observeTrack(final String key, final Track t)
    {
       mark(t.exists(), t.name(), t.trackType(), t.isGroup(), t.isActivated(), t.color(),
          t.volume().value(), t.volume().value().displayedValue(), t.pan().value(),
-         t.pan().value().displayedValue(), t.mute(), t.solo(), t.arm(), t.monitorMode(),
-         t.position());
-      final SendBank sends = t.sendBank();
-      for (int i = 0; i < sends.getSizeOfBank(); i++)
+         t.pan().value().displayedValue(), t.mute(), t.solo(), t.position());
+      mark(optional(t::arm), optional(t::monitorMode));
+      final SendBank sends = optional(t::sendBank);
+      if (sends != null)
       {
-         final Send s = sends.getItemAt(i);
-         mark(s.exists(), s.name(), s.value(), s.value().displayedValue());
+         sendBanks.put(key, sends);
+         for (int i = 0; i < sends.getSizeOfBank(); i++)
+         {
+            final Send s = sends.getItemAt(i);
+            mark(s.exists(), s.name(), s.value(), s.value().displayedValue());
+         }
       }
-      final ClipLauncherSlotBank slots = t.clipLauncherSlotBank();
-      for (int i = 0; i < slots.getSizeOfBank(); i++)
+      final ClipLauncherSlotBank slots = optional(t::clipLauncherSlotBank);
+      if (slots != null)
       {
-         final ClipLauncherSlot c = slots.getItemAt(i);
-         mark(c.exists(), c.hasContent(), c.name(), c.color(), c.isPlaying(), c.isRecording(),
-            c.isPlaybackQueued());
+         slotBanks.put(key, slots);
+         for (int i = 0; i < slots.getSizeOfBank(); i++)
+         {
+            final ClipLauncherSlot c = slots.getItemAt(i);
+            mark(c.exists(), c.hasContent(), c.name(), c.color(), c.isPlaying(), c.isRecording(),
+               c.isPlaybackQueued());
+         }
       }
    }
 
@@ -263,6 +298,9 @@ public class BridgeExtension extends ControllerExtension
    @Override
    public void exit()
    {
+      running = false;
+      if (server != null)
+         server.close();
       host.println("bitwig-mcp-rs bridge stopped");
    }
 
@@ -274,21 +312,25 @@ public class BridgeExtension extends ControllerExtension
 
    // ================================================================ transport layer
 
-   private void onConnect(final RemoteConnection conn)
+   /** Handles queued frames on the control thread, then runs again in a few milliseconds. */
+   private void pump()
    {
-      host.println("bitwig-mcp-rs bridge: client connected");
-      conn.setReceiveCallback(data -> onFrame(conn, data));
-      conn.setDisconnectCallback(() -> host.println("bitwig-mcp-rs bridge: client left"));
+      if (!running)
+         return;
+      Server.Incoming in;
+      while ((in = server.poll()) != null)
+         onFrame(in.conn, in.data);
+      host.scheduleTask(this::pump, 5);
    }
 
    /** One reply, sent at most once. */
    final class Reply
    {
-      private final RemoteConnection conn;
+      private final Server.Conn conn;
       private final Object id;
       private boolean sent;
 
-      Reply(final RemoteConnection conn, final Object id)
+      Reply(final Server.Conn conn, final Object id)
       {
          this.conn = conn;
          this.id = id;
@@ -317,14 +359,9 @@ public class BridgeExtension extends ControllerExtension
          if (sent)
             return;
          sent = true;
-         final byte[] body = Json.write(m).getBytes(StandardCharsets.UTF_8);
-         // Our own length header: Bitwig may add one more, which the Rust side strips.
-         final ByteBuffer frame = ByteBuffer.allocate(4 + body.length);
-         frame.putInt(body.length);
-         frame.put(body);
          try
          {
-            conn.send(frame.array());
+            conn.send(Json.write(m).getBytes(StandardCharsets.UTF_8));
          }
          catch (final Exception e)
          {
@@ -333,7 +370,7 @@ public class BridgeExtension extends ControllerExtension
       }
    }
 
-   private void onFrame(final RemoteConnection conn, final byte[] data)
+   private void onFrame(final Server.Conn conn, final byte[] data)
    {
       Reply reply = new Reply(conn, null);
       try
@@ -418,7 +455,7 @@ public class BridgeExtension extends ControllerExtension
          case "set_track":
          {
             final Addr a = addr(q.obj("track"));
-            setTrack(a.track, q);
+            setTrack(a, q);
             later(SETTLE_MS, r, () -> r.ok(trackSnapshot(a)));
             return;
          }
@@ -478,7 +515,7 @@ public class BridgeExtension extends ControllerExtension
                final Parameter p = remotePage.getParameter(i);
                if (!p.exists().get())
                   throw new IllegalArgumentException("parameter " + (i + 1) + " is empty on this page");
-               p.value().set(clamp01(q.num("value")));
+               p.value().setImmediately(clamp01(q.num("value")));
                later(SETTLE_MS, r, () -> r.ok(paramSnapshot(i)));
             });
             return;
@@ -512,7 +549,9 @@ public class BridgeExtension extends ControllerExtension
             if (bytes.length < 3 || (bytes[0] & 0xFF) != 0xF0 || (bytes[bytes.length - 1] & 0xFF) != 0xF7)
                throw new IllegalArgumentException("SysEx must start with F0 and end with F7");
             if (sysexOut == null)
-               throw new IllegalArgumentException("no MIDI output: assign one to the MCP bridge controller");
+               throw new IllegalArgumentException("SysEx needs the \"MCP bridge + SysEx out\" "
+                  + "controller (Bitwig: Settings > Controllers > bitwig-mcp-rs) with the synth's "
+                  + "MIDI port as its output");
             sysexOut.sendSysex(bytes);
             final Map<String, Object> res = new LinkedHashMap<>();
             res.put("sent", bytes.length);
@@ -562,6 +601,11 @@ public class BridgeExtension extends ControllerExtension
       final DeviceBank devices;
       final BooleanValue selected;
 
+      String key()
+      {
+         return bank + ":" + index;
+      }
+
       Addr(final String bank, final int index, final Track track, final DeviceBank devices,
          final BooleanValue selected)
       {
@@ -573,6 +617,18 @@ public class BridgeExtension extends ControllerExtension
       }
    }
 
+   /**
+    * The flat main bank also lists the effect tracks and the master; those are addressed
+    * through their own banks, so "main" means audio, instrument and group tracks only.
+    */
+   private boolean isRegular(final int i)
+   {
+      if (i < 0 || i >= TRACKS || !mainBank.getItemAt(i).exists().get())
+         return false;
+      final String type = mainBank.getItemAt(i).trackType().get();
+      return !"Effect".equals(type) && !"Master".equals(type);
+   }
+
    private Addr addr(final Json.Obj a)
    {
       final String bank = a.str("bank");
@@ -580,8 +636,8 @@ public class BridgeExtension extends ControllerExtension
       switch (bank)
       {
          case "main":
-            if (i < 0 || i >= TRACKS || !mainBank.getItemAt(i).exists().get())
-               throw new IllegalArgumentException("no track " + (i + 1));
+            if (!isRegular(i))
+               throw new IllegalArgumentException("no audio, instrument or group track at " + i);
             return new Addr(bank, i, mainBank.getItemAt(i), mainDevices[i], mainSelected[i]);
          case "effect":
             if (i < 0 || i >= FX_TRACKS || !fxBank.getItemAt(i).exists().get())
@@ -601,11 +657,19 @@ public class BridgeExtension extends ControllerExtension
       return sceneBank.getItemAt(i);
    }
 
-   private static ClipLauncherSlot slot(final Addr a, final int i)
+   private ClipLauncherSlotBank slots(final Addr a)
+   {
+      final ClipLauncherSlotBank b = slotBanks.get(a.key());
+      if (b == null)
+         throw new IllegalArgumentException("this track has no clip launcher slots");
+      return b;
+   }
+
+   private ClipLauncherSlot slot(final Addr a, final int i)
    {
       if (i < 0 || i >= SCENES)
          throw new IllegalArgumentException("slot must be 1-" + SCENES);
-      return a.track.clipLauncherSlotBank().getItemAt(i);
+      return slots(a).getItemAt(i);
    }
 
    private static Device device(final Addr a, final int i)
@@ -645,7 +709,7 @@ public class BridgeExtension extends ControllerExtension
       m.put("transport", transportSnapshot());
       final List<Object> tracks = new ArrayList<>();
       for (int i = 0; i < TRACKS; i++)
-         if (mainBank.getItemAt(i).exists().get())
+         if (isRegular(i))
             tracks.add(trackSnapshot(new Addr("main", i, mainBank.getItemAt(i), mainDevices[i],
                mainSelected[i])));
       m.put("tracks", tracks);
@@ -723,11 +787,11 @@ public class BridgeExtension extends ControllerExtension
       m.put("pan_text", t.pan().value().displayedValue().get());
       m.put("mute", t.mute().get());
       m.put("solo", t.solo().get());
-      m.put("arm", t.arm().get());
-      m.put("monitor_mode", t.monitorMode().get());
+      m.put("arm", optional(() -> t.arm().get()));
+      m.put("monitor_mode", optional(() -> t.monitorMode().get()));
       final List<Object> sends = new ArrayList<>();
-      final SendBank sb = t.sendBank();
-      for (int i = 0; i < sb.getSizeOfBank(); i++)
+      final SendBank sb = sendBanks.get(a.key());
+      for (int i = 0; sb != null && i < sb.getSizeOfBank(); i++)
       {
          final Send s = sb.getItemAt(i);
          if (!s.exists().get())
@@ -742,8 +806,8 @@ public class BridgeExtension extends ControllerExtension
       m.put("sends", sends);
       m.put("devices", devicesSnapshot(a));
       final List<Object> clips = new ArrayList<>();
-      final ClipLauncherSlotBank slots = t.clipLauncherSlotBank();
-      for (int i = 0; i < slots.getSizeOfBank(); i++)
+      final ClipLauncherSlotBank slots = slotBanks.get(a.key());
+      for (int i = 0; slots != null && i < slots.getSizeOfBank(); i++)
       {
          final ClipLauncherSlot c = slots.getItemAt(i);
          if (!c.hasContent().get())
@@ -953,26 +1017,36 @@ public class BridgeExtension extends ControllerExtension
          app.createInstrumentTrack(position);
       else
          throw new IllegalArgumentException("unknown track kind '" + kind + "'");
-      final int index = position < 0 ? before : Math.min(position, before);
-      waitFor(() -> mainBank.itemCount().get() > before && mainBank.getItemAt(index).exists().get(),
-         3000, "the new track", r, () -> {
+      // Bitwig selects a track it creates: find it through the selection, not by counting
+      // (the flat bank also holds the effect tracks and the master at its end).
+      waitFor(() -> mainBank.itemCount().get() > before, 3000, "the new track", r,
+         () -> later(150, r, () -> {
+            int index = -1;
+            for (int i = 0; i < TRACKS; i++)
+               if (isRegular(i) && mainSelected[i].get())
+                  index = i;
+            if (index < 0)
+               throw new IllegalStateException("created a track but could not find it; "
+                  + "check get_project before changing anything");
             final Map<String, Object> m = new LinkedHashMap<>();
             m.put("bank", "main");
             m.put("index", index);
+            m.put("type", mainBank.getItemAt(index).trackType().get());
             r.ok(m);
-         });
+         }));
    }
 
-   private void setTrack(final Track t, final Json.Obj q)
+   private void setTrack(final Addr a, final Json.Obj q)
    {
+      final Track t = a.track;
       if (q.has("name"))
          t.name().set(q.str("name"));
       if (q.has("color"))
          setColor(t.color(), q.list("color"));
       if (q.has("volume"))
-         t.volume().value().set(clamp01(q.num("volume")));
+         t.volume().value().setImmediately(clamp01(q.num("volume")));
       if (q.has("pan"))
-         t.pan().value().set(clamp01(q.num("pan")));
+         t.pan().value().setImmediately(clamp01(q.num("pan")));
       if (q.has("mute"))
          t.mute().set(q.bool("mute"));
       if (q.has("solo"))
@@ -983,13 +1057,14 @@ public class BridgeExtension extends ControllerExtension
          t.isActivated().set(q.bool("activated"));
       if (q.has("monitor_mode"))
          t.monitorMode().set(q.str("monitor_mode"));
+      final SendBank sb = sendBanks.get(a.key());
       for (final Object o : q.list("sends"))
       {
          final Json.Obj s = new Json.Obj(o);
          final int i = s.integer("index");
-         if (i < 0 || i >= t.sendBank().getSizeOfBank() || !t.sendBank().getItemAt(i).exists().get())
-            throw new IllegalArgumentException("no send " + (i + 1));
-         t.sendBank().getItemAt(i).value().set(clamp01(s.num("volume")));
+         if (sb == null || i < 0 || i >= sb.getSizeOfBank() || !sb.getItemAt(i).exists().get())
+            throw new IllegalArgumentException("no send " + (i + 1) + " on this track");
+         sb.getItemAt(i).value().setImmediately(clamp01(s.num("volume")));
       }
    }
 
@@ -1063,7 +1138,7 @@ public class BridgeExtension extends ControllerExtension
       final ClipLauncherSlot s = slot(a, i);
       if (s.hasContent().get())
          throw new IllegalArgumentException("slot " + (i + 1) + " already holds a clip");
-      a.track.clipLauncherSlotBank().createEmptyClip(i, q.integer("length"));
+      slots(a).createEmptyClip(i, q.integer("length"));
       waitFor(() -> s.hasContent().get(), 3000, "the new clip", r, () -> {
          final Map<String, Object> m = new LinkedHashMap<>();
          m.put("slot", i);
@@ -1279,9 +1354,13 @@ public class BridgeExtension extends ControllerExtension
             throw new IllegalArgumentException("no browser tab '" + contentType + "'; have "
                + String.join(", ", types));
          }
-         browser.selectedContentTypeIndex().set(t);
+         final int tab = t;
+         browser.selectedContentTypeIndex().set(tab);
          results.scrollPosition().set(0);
-         later(400, r, () -> scan(name.toLowerCase(Locale.ROOT), 0, -1, new ArrayList<>(), r, done));
+         waitFor(() -> browser.selectedContentTypeIndex().get() == tab
+            && results.itemCount().get() > 0 && results.getItemAt(0).exists().get(), 5000,
+            "browser results", r,
+            () -> later(300, r, () -> scan(name.toLowerCase(Locale.ROOT), 0, -1, new ArrayList<>(), r, done)));
       });
    }
 
@@ -1313,14 +1392,19 @@ public class BridgeExtension extends ControllerExtension
       if (results.canScrollForwards().get() && page < MAX_PAGES)
       {
          results.scrollPageForwards();
-         later(150, r, () -> scan(needle, page + 1, found, similar, r, done));
+         later(300, r, () -> scan(needle, page + 1, found, similar, r, done));
          return;
       }
       if (found < 0)
       {
          browser.cancel();
-         r.fail("no browser result named '" + needle + "'"
-            + (similar.isEmpty() ? "" : "; similar: " + String.join(", ", similar)));
+         final List<String> seen = new ArrayList<>();
+         for (int i = 0; i < Math.min(5, RESULTS); i++)
+            if (results.getItemAt(i).exists().get())
+               seen.add(results.getItemAt(i).name().get());
+         r.fail("no browser result named '" + needle + "' among " + results.itemCount().get()
+            + " results" + (similar.isEmpty() ? "" : "; similar: " + String.join(", ", similar))
+            + (seen.isEmpty() ? "" : "; e.g. " + String.join(", ", seen)));
          return;
       }
       results.scrollPosition().set(found);

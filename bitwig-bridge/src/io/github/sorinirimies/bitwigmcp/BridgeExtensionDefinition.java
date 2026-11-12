@@ -67,13 +67,13 @@ public class BridgeExtensionDefinition extends ControllerExtensionDefinition
    }
 
    /**
-    * One optional MIDI output, used only for SysEx (hardware synth settings): Track MIDI
-    * cannot carry SysEx. Leave it unassigned if you don't need SysEx.
+    * No MIDI ports: Bitwig would otherwise grab a port that another controller may own and
+    * refuse to start the bridge. SysEx gets its own product, {@link SysexBridgeExtensionDefinition}.
     */
    @Override
    public int getNumMidiOutPorts()
    {
-      return 1;
+      return 0;
    }
 
    @Override

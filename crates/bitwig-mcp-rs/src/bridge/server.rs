@@ -792,6 +792,26 @@ impl BridgeServer {
     }
 }
 
+/// Refuses to touch a "new" track whose type does not fit the kind asked for: renaming the
+/// wrong track (once: the master) is worse than failing.
+fn check_created_type(kind: TrackKind, ty: Option<&str>) -> Result<(), String> {
+    let ok = match (kind, ty) {
+        (_, None) => true, // older extension: no type reported
+        (TrackKind::Instrument, Some(t)) => t == "Instrument" || t == "Hybrid",
+        (TrackKind::Audio, Some(t)) => t == "Audio" || t == "Hybrid",
+        (TrackKind::Effect, Some(t)) => t == "Effect",
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "Bitwig reported the new track as {:?}, not {kind:?}; nothing was changed. \
+             Check get_project.",
+            ty.unwrap_or_default()
+        ))
+    }
+}
+
 /// Index of `name` among `names` (exact, then unique substring), 0-based.
 fn pick(names: &[String], name: &str, what: &str) -> Result<u32, McpError> {
     let n = name.trim().to_lowercase();
@@ -933,6 +953,7 @@ impl BridgeServer {
                 position,
             })
             .await?;
+        check_created_type(a.kind, created["type"].as_str()).map_err(err)?;
         let track: TrackAddr = serde_json::from_value(created).map_err(err)?;
         let mut notes = Vec::new();
         let source = match (a.device, a.preset) {
@@ -1728,6 +1749,17 @@ mod tests {
         assert!((db0 - 0.7937).abs() < 1e-3, "dB wins");
         assert!(volume_of(Some(1.5), None).is_err());
         assert!(volume_of(None, Some(f64::NAN)).is_err());
+    }
+
+    #[test]
+    fn created_track_type_is_checked() {
+        assert!(check_created_type(TrackKind::Instrument, Some("Instrument")).is_ok());
+        assert!(check_created_type(TrackKind::Instrument, Some("Hybrid")).is_ok());
+        assert!(check_created_type(TrackKind::Audio, Some("Audio")).is_ok());
+        assert!(check_created_type(TrackKind::Effect, Some("Effect")).is_ok());
+        assert!(check_created_type(TrackKind::Instrument, Some("Master")).is_err());
+        assert!(check_created_type(TrackKind::Audio, Some("Effect")).is_err());
+        assert!(check_created_type(TrackKind::Instrument, None).is_ok());
     }
 
     #[test]
