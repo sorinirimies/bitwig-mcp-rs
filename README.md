@@ -4,6 +4,7 @@
 [![Security](https://github.com/sorinirimies/bitwig-mcp-rs/actions/workflows/security.yml/badge.svg)](https://github.com/sorinirimies/bitwig-mcp-rs/actions/workflows/security.yml)
 [![Fuzz](https://github.com/sorinirimies/bitwig-mcp-rs/actions/workflows/fuzz.yml/badge.svg)](https://github.com/sorinirimies/bitwig-mcp-rs/actions/workflows/fuzz.yml)
 [![crates.io](https://img.shields.io/crates/v/bitwig-mcp-rs.svg)](https://crates.io/crates/bitwig-mcp-rs)
+[![Downloads](https://img.shields.io/crates/d/bitwig-mcp-rs.svg)](https://crates.io/crates/bitwig-mcp-rs)
 
 Rust MCP server that controls Bitwig Studio: compose tracks, shape sounds, mix, record an arrangement and export audio, from any MCP client. It talks to Bitwig through its own bridge extension (or, optionally, DrivenByMoss OSC).
 
