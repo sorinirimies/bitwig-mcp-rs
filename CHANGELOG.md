@@ -8,6 +8,7 @@ All notable changes to this project are documented here. It is generated from
 
 ### 📚 Documentation
 
+- Crates.io downloads badge ([`09f1dc6`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/09f1dc611242c09e6d9c399206f00c01c009ec9f))
 - README lists every tool group, the arrangement flow and the bump step ([`10dfd98`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/10dfd98d0ae23735d16f17129db6de0ff02f6e55))
 
 ## [0.2.1](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.2.0...v0.2.1) — 2026-11-12
