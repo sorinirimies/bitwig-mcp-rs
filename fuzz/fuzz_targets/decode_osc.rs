@@ -3,8 +3,8 @@
 //! never panics; every decoded message survives an encode/decode round trip with its address
 //! intact; and feeding it to the state cache and rendering every view never panics.
 
-use bitwig_mcp_rs::protocol::{Scale, decode, encode};
-use bitwig_mcp_rs::state::State;
+use bitwig_mcp_rs::osc::wire::{Scale, decode, encode};
+use bitwig_mcp_rs::osc::state::State;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
