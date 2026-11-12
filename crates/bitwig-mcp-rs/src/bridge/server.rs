@@ -874,6 +874,31 @@ pub struct TransformClipArgs {
     pub ops: Vec<theory::Transform>,
 }
 
+/// One place a clip is copied to.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CopyDest {
+    /// Slot: 1-based number or scene name.
+    pub slot: Ref,
+    /// Variation for this copy only, e.g. [{"op": "transpose", "semitones": 7}] or
+    /// [{"op": "thin", ...}]; same operations as transform_clip.
+    pub ops: Option<Vec<theory::Transform>>,
+    /// Name of the copy; default: unchanged.
+    pub name: Option<String>,
+}
+
+/// Copy a clip into other slots.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CopyClipArgs {
+    /// Source track name or 1-based number.
+    pub track: Ref,
+    /// Source slot: 1-based number or scene name.
+    pub slot: Ref,
+    /// Target track; default: the source track.
+    pub to_track: Option<Ref>,
+    /// The slots to copy to, each with an optional variation. Existing clips there are replaced.
+    pub to: Vec<CopyDest>,
+}
+
 /// Record into a slot.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RecordClipArgs {
@@ -901,6 +926,20 @@ pub struct SongPlanArgs {
     /// "sections": [{"name", "bars", "scene", "energy"}], "tracks": {"Bass": "role"},
     /// "notes": [...]}. Replaces the stored plan.
     pub plan: Json,
+}
+
+/// Build the parts of a song.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct BuildSongArgs {
+    /// Sections to build: [{"name": "Verse", "scene": "Verse", "parts": [{"kind": "chords",
+    /// "track": "Pad", "progression": "i VI III VII"}, ...]}]. A part is a write_drums,
+    /// write_bassline, write_chords, write_arp, create_clip or copy_clip call: `kind` is drums,
+    /// bass, chords, arp, clip or copy, the other fields are that tool's arguments. `slot`
+    /// defaults to the section's `scene` (else its `name`), `key` to the song plan's key.
+    /// Default: the `sections` of the stored song plan.
+    pub sections: Option<Vec<Json>>,
+    /// Build only the sections with these names.
+    pub only: Option<Vec<String>>,
 }
 
 /// Prompt: compose.
@@ -1036,6 +1075,24 @@ impl BridgeServer {
             .call_with(c, Duration::from_secs(45))
             .await
             .map_err(err)
+    }
+
+    /// Runs one `build_song` part: the tool named by `kind`, with `args` as its arguments.
+    async fn build_part(&self, kind: &str, args: Json) -> ToolResult {
+        fn parse<T: serde::de::DeserializeOwned>(kind: &str, v: Json) -> Result<T, McpError> {
+            serde_json::from_value(v).map_err(|e| bad(format!("{kind} part: {e}")))
+        }
+        match kind {
+            "drums" => self.write_drums(Parameters(parse(kind, args)?)).await,
+            "bass" => self.write_bassline(Parameters(parse(kind, args)?)).await,
+            "chords" => self.write_chords(Parameters(parse(kind, args)?)).await,
+            "arp" => self.write_arp(Parameters(parse(kind, args)?)).await,
+            "clip" => self.create_clip(Parameters(parse(kind, args)?)).await,
+            "copy" => self.copy_clip(Parameters(parse(kind, args)?)).await,
+            other => Err(bad(format!(
+                "part kind {other:?} must be drums, bass, chords, arp, clip or copy"
+            ))),
+        }
     }
 
     /// Sets one parameter of a device found by `track_device`.
@@ -2297,6 +2354,69 @@ impl BridgeServer {
     }
 
     #[tool(
+        description = "Build a song from its plan in one call: for every section, run its parts (drums, bass, chords, arp, clip, copy) into the section's scene. Uses the sections of the stored song plan unless given. Each part is a write_* / create_clip / copy_clip call; a failing part is reported and the rest still run. Create the tracks and scenes first."
+    )]
+    async fn build_song(&self, Parameters(a): Parameters<BuildSongArgs>) -> ToolResult {
+        let plan: Json = match &a.sections {
+            Some(_) => Json::Null,
+            None => {
+                let r = self.call(Command::GetSongPlan).await?;
+                serde_json::from_str(r["text"].as_str().unwrap_or_default()).unwrap_or(Json::Null)
+            }
+        };
+        let sections = a
+            .sections
+            .clone()
+            .or_else(|| plan["sections"].as_array().cloned())
+            .ok_or_else(|| bad("no sections: pass them, or store a plan with sections and parts (set_song_plan)"))?;
+        let key = plan["key"].as_str().map(str::to_owned);
+        let mut results = Vec::new();
+        for sec in &sections {
+            let name = sec["name"].as_str().unwrap_or_default();
+            if let Some(only) = &a.only
+                && !only.iter().any(|o| o.eq_ignore_ascii_case(name))
+            {
+                continue;
+            }
+            let scene = sec["scene"].as_str().unwrap_or(name);
+            for part in sec["parts"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+            {
+                let mut part = part.clone();
+                let kind = part["kind"].as_str().unwrap_or_default().to_owned();
+                if let Some(o) = part.as_object_mut() {
+                    o.remove("kind");
+                    if kind != "copy" && !scene.is_empty() {
+                        o.entry("slot").or_insert_with(|| json!(scene));
+                    }
+                    if let (Some(k), true) =
+                        (&key, matches!(kind.as_str(), "bass" | "chords" | "arp"))
+                    {
+                        o.entry("key").or_insert_with(|| json!(k));
+                    }
+                }
+                let track = part["track"].clone();
+                let r = self.build_part(&kind, part).await;
+                results.push(match r {
+                    Ok(_) => json!({"section": name, "kind": kind, "track": track, "ok": true}),
+                    Err(e) => {
+                        json!({"section": name, "kind": kind, "track": track, "error": e.message})
+                    }
+                });
+            }
+        }
+        if results.is_empty() {
+            return Err(bad(
+                "no parts to build (check `only` and the sections' parts)",
+            ));
+        }
+        let failed = results.iter().filter(|r| r.get("error").is_some()).count();
+        out(&json!({"built": results.len() - failed, "failed": failed, "parts": results}))
+    }
+
+    #[tool(
         description = "Write a drum pattern: per voice a step string (\"x...x...x...x...\", X = accent, _ = tie) and/or a Euclidean rhythm. Voices are named keys of an instrument profile (default General MIDI, which Bitwig's Drum Machine uses: kick, snare, clap, closed_hat, open_hat, low_tom, mid_tom, high_tom, crash, ride), note names or numbers."
     )]
     async fn write_drums(&self, Parameters(a): Parameters<WriteDrumsArgs>) -> ToolResult {
@@ -2366,6 +2486,52 @@ impl BridgeServer {
         out(
             &json!({"before": notes.len(), "result": serde_json::from_str::<Json>(&r).unwrap_or(Json::Null)}),
         )
+    }
+
+    #[tool(
+        description = "Copy a clip's notes into other slots (scenes), on the same track or another, each copy optionally varied (transpose, thin, humanize, ...). Replaces what is in the target slots. Saves rewriting the same pad for every section."
+    )]
+    async fn copy_clip(&self, Parameters(a): Parameters<CopyClipArgs>) -> ToolResult {
+        if a.to.is_empty() {
+            return Err(bad("to is empty"));
+        }
+        let (_, (track, slot)) = self
+            .resolve(|v| {
+                let track = v.track(&a.track)?;
+                let slot = v.slot(&a.slot)?;
+                if v.has_clip(track, slot) {
+                    Ok((track, slot))
+                } else {
+                    Err(format!("slot {} has no clip", slot + 1))
+                }
+            })
+            .await?;
+        let (notes, length) = self.read_clip_notes(track, slot).await?;
+        if notes.is_empty() {
+            return Err(bad("the source clip has no notes"));
+        }
+        let dest_track = a.to_track.clone().unwrap_or_else(|| a.track.clone());
+        let mut done = Vec::new();
+        for d in &a.to {
+            let copy = match d.ops.as_deref() {
+                Some(ops) if !ops.is_empty() => {
+                    theory::transform(&notes, ops, length).map_err(bad)?
+                }
+                _ => notes.clone(),
+            };
+            if copy.is_empty() {
+                return Err(bad(format!("the variation for {} left no notes", d.slot)));
+            }
+            let target = Target {
+                track: dest_track.clone(),
+                slot: d.slot.clone(),
+                name: d.name.clone(),
+                mode: Some(WriteMode::Replace),
+            };
+            self.put_notes(&target, copy.clone(), length).await?;
+            done.push(json!({"slot": d.slot, "notes": copy.len()}));
+        }
+        out(&json!({"source_notes": notes.len(), "length_beats": length, "copied": done}))
     }
 
     #[tool(
@@ -3014,7 +3180,8 @@ mod tests {
                  "devices": [{"index": 0, "name": "Drum Machine"}],
                  "sends": [{"index": 0, "name": "Reverb"}]},
                 {"bank": "main", "index": 1, "name": "Synth",
-                 "devices": [{"index": 0, "name": "HW Instrument"}]}
+                 "devices": [{"index": 0, "name": "HW Instrument"}],
+                 "clips": [{"slot": 0, "name": "pad"}]}
             ],
             "effect_tracks": [{"bank": "effect", "index": 0, "name": "Reverb"}],
             "master": {"bank": "master", "index": 0, "name": "Master"},
@@ -3221,6 +3388,71 @@ mod tests {
         );
         let got = s.get_song_plan().await.expect("get");
         assert!(got.contains("A minor"), "{got}");
+    }
+
+    #[tokio::test]
+    async fn copy_clip_writes_each_copy_with_its_own_variation() {
+        let (s, log) = rig().await;
+        let r = s
+            .copy_clip(Parameters(CopyClipArgs {
+                track: Ref::Name("synth".into()),
+                slot: Ref::Name("intro".into()),
+                to_track: None,
+                to: vec![
+                    CopyDest {
+                        slot: Ref::Name("verse".into()),
+                        ops: None,
+                        name: Some("pad 2".into()),
+                    },
+                    CopyDest {
+                        slot: Ref::Number(5),
+                        ops: Some(vec![theory::Transform::Transpose { semitones: 12 }]),
+                        name: None,
+                    },
+                ],
+            }))
+            .await
+            .expect("tool");
+        assert!(r.contains("\"source_notes\":2"), "{r}");
+        let w = sent(&log, "write_notes");
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0]["clear"], true);
+        let keys = |i: usize| -> Vec<u64> {
+            w[i]["notes"]
+                .as_array()
+                .expect("notes")
+                .iter()
+                .map(|n| n["key"].as_u64().expect("key"))
+                .collect()
+        };
+        assert_eq!(keys(0), vec![60, 64]);
+        assert_eq!(keys(1), vec![72, 76]);
+        assert_eq!(sent(&log, "set_clip")[0]["name"], "pad 2");
+    }
+
+    #[tokio::test]
+    async fn build_song_runs_parts_into_the_section_scenes() {
+        let (s, log) = rig().await;
+        let r = s
+            .build_song(Parameters(BuildSongArgs {
+                sections: Some(vec![json!({
+                    "name": "Verse",
+                    "parts": [
+                        {"kind": "chords", "track": "Synth", "progression": "i VI", "key": "A minor"},
+                        {"kind": "bass", "track": "Synth", "progression": "i VI", "key": "A minor"},
+                        {"kind": "ufo", "track": "Synth"}
+                    ]
+                })]),
+                only: None,
+            }))
+            .await
+            .expect("tool");
+        assert!(
+            r.contains("\"built\":2") && r.contains("\"failed\":1"),
+            "{r}"
+        );
+        assert_eq!(sent(&log, "write_notes").len(), 2);
+        assert!(r.contains("ufo"), "{r}");
     }
 
     #[tokio::test]

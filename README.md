@@ -69,7 +69,8 @@ for the OSC backend `--send-port` (8000), `--listen-port` (9000), `--resolution`
   `bitwig://project`, `bitwig://instruments`, `bitwig://protocol`.
 * **Build:** `create_track` (kind, name, color, position and a device or preset in one call),
   `create_scene`, `create_clip` (with exact notes: `{"note": "C3", "start": 0, "length": 0.5}`),
-  `write_notes`, `insert_device`.
+  `write_notes`, `copy_clip` (a clip into other scenes, varied), `build_song` (every section of
+  the song plan in one call), `insert_device`.
 * **Mix and play:** `set_track` (volume or `volume_db`, pan, mute, solo, arm, sends),
   `set_device_param` (by parameter name), `set_device_params` (several at once), `transport`, `set_transport`, `clip_action`,
   `scene_action`.
