@@ -12,6 +12,7 @@
 #   6. no unused dependencies (cargo machete, installed when missing)
 #   7. nushell script tests
 #   8. the Bitwig bridge extension builds and its Java tests pass (skipped without javac)
+#   9. the fuzz targets compile (cargo check, stable: a broken import must not wait for CI)
 # Project-specific steps (a wasm build, a web bundle, …) go in as extra run_step
 # calls — one place, so every caller gets them.
 #
@@ -56,6 +57,9 @@ def main [--skip-fmt, --skip-test, --skip-nu] {
         $ok = (run_step "nushell tests" { nu scripts/tests/run_all.nu }) and $ok
     }
     $ok = (run_step "bitwig bridge extension (javac)" { nu scripts/bridge.nu check }) and $ok
+    $ok = (run_step "fuzz targets compile" {
+        cargo check --manifest-path fuzz/Cargo.toml --bins --quiet
+    }) and $ok
     if not $ok {
         print $"(ansi red)✗ Quality gate FAILED(ansi reset)"
         exit 1
