@@ -819,9 +819,9 @@ dependencies = [
 
 [[package]]
 name = "synthazia-hardware"
-version = "0.0.3"
+version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4050190e7ebd50443eccb6d42263935c2fd5213d6eb00058c3ecce4861340291"
+checksum = "fffa26e2601e9d5256924070aef3b4b650041683dbe73d4ea5d0b662aa278f50"
 dependencies = [
  "serde",
  "toml",
