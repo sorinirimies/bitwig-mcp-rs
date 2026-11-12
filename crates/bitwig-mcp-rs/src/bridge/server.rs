@@ -877,7 +877,8 @@ pub struct DrumKitArgs {
 /// Device listing.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListDevicesArgs {
-    /// Only names containing this (case-insensitive).
+    /// Only names containing this (case-insensitive); also lists matching presets, e.g.
+    /// "pad", "bass", "80s".
     pub query: Option<String>,
     /// Browser tab: "Devices" (default) or "Presets".
     pub content_type: Option<String>,
@@ -1910,7 +1911,7 @@ impl BridgeServer {
     }
 
     #[tool(
-        description = "Hardware instrument profiles: built-in ones (generic General MIDI with a GM drum map; Behringer Model D, Crave, CAT, Wasp, Edge, Solina) plus <config dir>/bitwig-mcp-rs/instruments/*.toml (the 'dir' it reports). Each lists its MIDI channel, what it can do over MIDI (notes), its named parameters (CC, NRPN, RPN, pitch bend, pressure, SysEx; with range and named values) and named keys."
+        description = "Hardware instrument profiles: built-in ones (generic General MIDI with a GM drum map; Behringer Model D, Crave, CAT, Wasp, Edge, Solina, 2600) plus <config dir>/bitwig-mcp-rs/instruments/*.toml (the 'dir' it reports). Each lists its MIDI channel, what it can do over MIDI (notes), its named parameters (CC, NRPN, RPN, pitch bend, pressure, SysEx; with range and named values) and named keys."
     )]
     async fn list_instruments(&self) -> ToolResult {
         let reg = self.profiles();
@@ -2302,11 +2303,20 @@ impl BridgeServer {
         let (mut known, other): (Vec<Json>, Vec<Json>) =
             items.into_iter().partition(|i| i.get("kind").is_some());
         let other_names: Vec<Json> = other.into_iter().map(|i| i["name"].clone()).collect();
+        // presets run into the thousands: names only when searched for
+        let presets = if needle.is_some() {
+            json!(other_names)
+        } else {
+            json!(format!(
+                "{} presets and plugins; pass query to search them",
+                other_names.len()
+            ))
+        };
         known.sort_by_key(|i| i["kind"].as_str().unwrap_or_default().to_owned());
         out(&json!({
             "total_in_browser": r["total"],
             "bitwig_devices": known,
-            "presets_and_plugins": other_names,
+            "presets_and_plugins": presets,
         }))
     }
 

@@ -176,7 +176,7 @@ public class BridgeExtension extends ControllerExtension
          cursorDevice.isEnabled(), cursorDevice.isWindowOpen(), cursorDevice.presetName(),
          cursorDevice.isPlugin());
       drumPads = cursorDevice.createDrumPadBank(128);
-      mark(cursorDevice.hasDrumPads());
+      mark(cursorDevice.hasDrumPads(), drumPads.scrollPosition());
       for (int i = 0; i < 128; i++)
          mark(drumPads.getItemAt(i).exists(), drumPads.getItemAt(i).name());
       remotePage = cursorDevice.createCursorRemoteControlsPage(PARAMS);
@@ -605,29 +605,10 @@ public class BridgeExtension extends ControllerExtension
                final int key = q.integer("key");
                if (key < 0 || key > 127)
                   throw new IllegalArgumentException("key must be 0-127");
-               final InsertionPoint ip = drumPads.getItemAt(key).insertionPoint();
-               final Json.Obj src = q.obj("source");
-               final Runnable done = () -> later(600, r, () -> r.ok(cursorDeviceSnapshot()));
-               switch (src.str("kind"))
-               {
-                  case "browser":
-                     browse(ip, src.str("name"), src.strOr("content_type", "Devices"), r, done);
-                     return;
-                  case "clap":
-                     ip.insertCLAPDevice(src.str("id"));
-                     done.run();
-                     return;
-                  case "vst3":
-                     ip.insertVST3Device(src.str("id"));
-                     done.run();
-                     return;
-                  case "file":
-                     ip.insertFile(src.str("path"));
-                     done.run();
-                     return;
-                  default:
-                     throw new IllegalArgumentException("unknown source");
-               }
+               // Bitwig scrolls a drum machine's pads to C1 (36): bring index 0 back to key 0
+               drumPads.scrollPosition().set(0);
+               waitFor(() -> drumPads.scrollPosition().get() == 0, 2000, "the drum pads", r,
+                  () -> later(100, r, () -> insertPad(q, key, r)));
             });
             return;
          case "list_browser":
@@ -954,7 +935,7 @@ public class BridgeExtension extends ControllerExtension
             if (!pad.exists().get() || pad.name().get().isEmpty())
                continue;
             final Map<String, Object> x = new LinkedHashMap<>();
-            x.put("key", i);
+            x.put("key", drumPads.scrollPosition().get() + i);
             x.put("name", pad.name().get());
             pads.add(x);
          }
@@ -1450,6 +1431,40 @@ public class BridgeExtension extends ControllerExtension
    }
 
    private static final int MAX_PAGES = 150;
+
+   /** Fills one pad (scrolled to 0, so index = key); an occupied pad is cleared first. */
+   private void insertPad(final Json.Obj q, final int key, final Reply r)
+   {
+      final com.bitwig.extension.controller.api.DrumPad pad = drumPads.getItemAt(key);
+      final boolean occupied = pad.exists().get() && !pad.name().get().isEmpty();
+      if (occupied)
+         pad.deleteObject();
+      later(occupied ? 300 : 0, r, () -> {
+         final InsertionPoint ip = pad.insertionPoint();
+         final Json.Obj src = q.obj("source");
+         final Runnable done = () -> later(600, r, () -> r.ok(cursorDeviceSnapshot()));
+         switch (src.str("kind"))
+         {
+            case "browser":
+               browse(ip, src.str("name"), src.strOr("content_type", "Devices"), r, done);
+               return;
+            case "clap":
+               ip.insertCLAPDevice(src.str("id"));
+               done.run();
+               return;
+            case "vst3":
+               ip.insertVST3Device(src.str("id"));
+               done.run();
+               return;
+            case "file":
+               ip.insertFile(src.str("path"));
+               done.run();
+               return;
+            default:
+               throw new IllegalArgumentException("unknown source");
+         }
+      });
+   }
 
    /** Bitwig keeps browser filters between uses: clear them so earlier searches don't hide
     * results (seen: an audio-FX device type left from browsing on the master). */
