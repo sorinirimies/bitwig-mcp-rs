@@ -4,6 +4,27 @@ All notable changes to this project are documented here. It is generated from
 [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org) — do not edit it by hand.
 
+## [0.2.0](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.1.2...v0.2.0) — 2026-11-12
+
+### ✨ Features
+
+- **bridge:** Replies to set_track, set_scene and set_device_param wait until Bitwig shows the change ([`b4b22dc`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/b4b22dc551d2fb96f33968558ee0f4be762d8cbf))
+- Record_arrangement, record_automation; tool cap 60; docs ([`b8a6aab`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/b8a6aab47a8558a93355942935f7d113ffa09370))
+- Get_meters, effects on single drum pads (extension rebuilt) ([`98e9780`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/98e978041fe40938489f2f24af2101ee947bcd05))
+- Write_melody, insert_chain, create_return, master_chain ([`e5f4d91`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/e5f4d91c9e9920b99ef402d47a1417a92fd22f94))
+- Copy_clip (varied copies into other scenes) and build_song (sections of the song plan) ([`631ccbd`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/631ccbd987a936bbd69fda64f84a969604df50f1))
+- Get_project summary by default (detail:true for all); set_device_params ([`23fb1d0`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/23fb1d027b74b96e75ada57c444b87beca7edf71))
+- Status reports server_version; bump rebuilds the bundled extension ([`47d9a88`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/47d9a88ea5606d6b86f87c3d84e193259565fa41))
+
+### 🐛 Bug fixes
+
+- **fuzz:** Decode_osc uses the osc:: module paths ([`1d3e9f8`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/1d3e9f86e734c4ab48d59f0eb4496516b227f23c))
+- Capture records the master pair at full level; params, devices, hints ([`95ef359`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/95ef359dfdfd9dbdb9e1daf4030aeae281aceaf6))
+
+### 🔄 CI and release
+
+- Quality gate compiles the fuzz targets ([`3b03063`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/3b03063d230422239db378342933e24ddac46c2b))
+
 ## [0.1.2](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.1.1...v0.1.2) — 2026-11-12
 
 ### ✨ Features
