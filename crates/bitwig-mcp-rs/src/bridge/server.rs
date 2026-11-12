@@ -32,9 +32,11 @@ use super::protocol::{
     SceneAction, SendLevel, TrackAction, TrackAddr, TrackChange, TrackKind, TransportAction,
     TransportChange,
 };
+use crate::capture;
 use crate::hardware::{self, MidiMessage, Profile, Registry};
 use crate::music;
 use crate::theory;
+use std::path::Path;
 
 type ToolResult = Result<String, McpError>;
 
@@ -796,6 +798,67 @@ pub struct ComposeArgs {
     pub hardware: Option<String>,
 }
 
+// ---------------------------------------------------------------- export parameters
+
+/// A clip.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ClipRef {
+    /// Track name or 1-based number.
+    pub track: Ref,
+    /// Slot: 1-based number or scene name.
+    pub slot: Ref,
+}
+
+/// MIDI export.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExportMidiArgs {
+    /// Export every clip of this scene, one MIDI track per Bitwig track.
+    pub scene: Option<Ref>,
+    /// Or these clips.
+    #[serde(default)]
+    pub clips: Vec<ClipRef>,
+    /// File name (without folder) or absolute path; default: PROJECT-TIME.mid in
+    /// the music folder's bitwig-mcp-rs/.
+    pub path: Option<String>,
+}
+
+/// Audio capture.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CaptureArgs {
+    /// Bars to record at the project tempo (default 8; max 512).
+    pub bars: Option<u32>,
+    /// Launch this scene from bar 1 (launcher songs); default: play the arranger from the
+    /// start.
+    pub scene: Option<Ref>,
+    /// wav (default, 32-bit float), flac or mp3.
+    pub format: Option<capture::Format>,
+    /// Also record each track alone (stems), one pass per track: takes bars x tracks of time.
+    pub stems: Option<bool>,
+    /// Seconds recorded after the last bar for reverb and delay tails (default 2).
+    pub tail_seconds: Option<f64>,
+    /// File name (without folder) or absolute path, without extension.
+    pub path: Option<String>,
+}
+
+/// Bitwig's own export dialogs.
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportKind {
+    /// Export Audio (offline render, stems, formats).
+    Audio,
+    /// Export MIDI.
+    Midi,
+    /// Export DAWproject (for other DAWs).
+    Dawproject,
+}
+
+/// Which dialog.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExportDialogArgs {
+    /// audio, midi or dawproject.
+    pub kind: ExportKind,
+}
+
 // ---------------------------------------------------------------- the server
 
 /// The bridge-backed MCP server.
@@ -1094,6 +1157,36 @@ fn voice_key(profile: Option<&Profile>, voice: &str) -> Result<u8, McpError> {
             "unknown drum voice {voice:?}: use a key name {names:?}, a note name or a number"
         ))
     })
+}
+
+/// Resolves an export path: absolute stays, a bare name goes into the default folder; the
+/// extension is set to `ext`.
+fn export_path(path: Option<&str>, default_stem: &str, ext: &str) -> PathBuf {
+    let p = match path.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) if Path::new(p).is_absolute() => PathBuf::from(p),
+        Some(p) => capture::default_dir().join(p),
+        None => capture::default_dir().join(capture::safe_name(default_stem)),
+    };
+    p.with_extension(ext)
+}
+
+/// Tempo and beats per bar from a snapshot.
+fn tempo_of(snapshot: &Json) -> (f64, f64, u8, u8) {
+    let tempo = snapshot["transport"]["tempo"]
+        .as_f64()
+        .unwrap_or(120.0)
+        .max(20.0);
+    let (num, den) = snapshot["transport"]["time_signature"]
+        .as_str()
+        .and_then(|s| s.split_once('/'))
+        .and_then(|(n, d)| Some((n.trim().parse::<u8>().ok()?, d.trim().parse::<u8>().ok()?)))
+        .unwrap_or((4, 4));
+    (
+        tempo,
+        f64::from(num) * 4.0 / f64::from(den.max(1)),
+        num,
+        den,
+    )
 }
 
 impl BridgeServer {
@@ -2144,6 +2237,214 @@ impl BridgeServer {
         )
     }
 
+    // ------------------------------------------------------------ export
+
+    #[tool(
+        description = "Export clips as a standard MIDI file (.mid): every clip of a scene (one MIDI track per Bitwig track) or a list of clips. Writes into the music folder's bitwig-mcp-rs/ unless a path is given."
+    )]
+    async fn export_midi(&self, Parameters(a): Parameters<ExportMidiArgs>) -> ToolResult {
+        let (snap, view) = self.project().await?;
+        let mut picks: Vec<(TrackAddr, u32)> = Vec::new();
+        if let Some(scene) = &a.scene {
+            let slot = view.slot(scene).map_err(bad)?;
+            for t in view.tracks.iter().chain(&view.effect_tracks) {
+                if t.clips.iter().any(|c| c.slot == slot) {
+                    picks.push((t.addr(), slot));
+                }
+            }
+        }
+        for c in &a.clips {
+            let track = view.track(&c.track).map_err(bad)?;
+            let slot = view.slot(&c.slot).map_err(bad)?;
+            if !view.has_clip(track, slot) {
+                return Err(bad(format!("slot {} of {} has no clip", slot + 1, c.track)));
+            }
+            picks.push((track, slot));
+        }
+        if picks.is_empty() {
+            return Err(bad("nothing to export: give a scene with clips or clips"));
+        }
+        let mut tracks = Vec::new();
+        for (track, slot) in &picks {
+            let (notes, _) = self.read_clip_notes(*track, *slot).await?;
+            let name = view
+                .track_view(*track)
+                .map(|t| t.name.clone())
+                .unwrap_or_default();
+            tracks.push(crate::smf::SmfTrack {
+                name,
+                channel: 1,
+                notes,
+            });
+        }
+        let (tempo, _, num, den) = tempo_of(&snap);
+        let project = snap["application"]["project_name"]
+            .as_str()
+            .unwrap_or("bitwig");
+        let stem = format!("{project}-{}", capture::stamp());
+        let path = export_path(a.path.as_deref(), &stem, "mid");
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(err)?;
+        }
+        let bytes = crate::smf::write(&tracks, tempo, num, den);
+        std::fs::write(&path, &bytes).map_err(|e| err(format!("{}: {e}", path.display())))?;
+        out(&json!({
+            "path": path.display().to_string(),
+            "tracks": tracks.iter().map(|t| json!({"name": t.name, "notes": t.notes.len()})).collect::<Vec<_>>(),
+            "tempo": tempo,
+        }))
+    }
+
+    #[tool(
+        description = "Export audio by recording Bitwig's output in real time (Linux, PipeWire): plays the arranger from the start, or a scene from bar 1, for N bars and writes WAV, FLAC or MP3 into the music folder's bitwig-mcp-rs/. Optional stems (each track alone, one pass each). Reports loudness (LUFS, true peak) with a short verdict, so you can check the mix."
+    )]
+    async fn capture_audio(&self, Parameters(a): Parameters<CaptureArgs>) -> ToolResult {
+        let bars = a.bars.unwrap_or(8);
+        if !(1..=512).contains(&bars) {
+            return Err(bad("bars must be 1-512"));
+        }
+        let tail = a.tail_seconds.unwrap_or(2.0).clamp(0.0, 30.0);
+        let format = a.format.unwrap_or_default();
+        let (snap, view) = self.project().await?;
+        let scene = a
+            .scene
+            .as_ref()
+            .map(|s| view.scene(s))
+            .transpose()
+            .map_err(bad)?;
+        let (tempo, beats_per_bar, _, _) = tempo_of(&snap);
+        let seconds = f64::from(bars) * beats_per_bar * 60.0 / tempo;
+        let project = snap["application"]["project_name"]
+            .as_str()
+            .unwrap_or("bitwig")
+            .to_owned();
+        let base = export_path(
+            a.path.as_deref(),
+            &format!("{project}-{}", capture::stamp()),
+            format.ext(),
+        );
+
+        // passes: the mix, then one per track with clips when stems are asked for
+        let mut passes: Vec<(String, Option<TrackAddr>)> = vec![("mix".into(), None)];
+        if a.stems.unwrap_or(false) {
+            for t in &view.tracks {
+                if !t.clips.is_empty() || !t.devices.is_empty() {
+                    passes.push((t.name.clone(), Some(t.addr())));
+                }
+            }
+        }
+        let mut files = Vec::new();
+        for (label, solo) in passes {
+            let file = if solo.is_some() {
+                let stem = base
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                base.with_file_name(format!("{stem}-{}", capture::safe_name(&label)))
+                    .with_extension(format.ext())
+            } else {
+                base.clone()
+            };
+            if let Some(t) = solo {
+                self.call(Command::SetTrack {
+                    track: t,
+                    change: TrackChange {
+                        solo: Some(true),
+                        ..TrackChange::default()
+                    },
+                })
+                .await?;
+            }
+            let wav = file.with_extension("capture.wav");
+            let bridge = Arc::clone(&self.bridge);
+            let result = capture::record(
+                capture::BITWIG_NODE,
+                &wav,
+                Duration::from_secs_f64(tail),
+                || async move {
+                    bridge
+                        .call(Command::Transport {
+                            action: TransportAction::Stop,
+                        })
+                        .await?;
+                    bridge
+                        .call(Command::SetTransport {
+                            change: TransportChange {
+                                position: Some(0.0),
+                                ..TransportChange::default()
+                            },
+                        })
+                        .await?;
+                    if let Some(sc) = scene {
+                        bridge
+                            .call(Command::SceneAction {
+                                scene: sc,
+                                action: SceneAction::Launch,
+                            })
+                            .await?;
+                    }
+                    bridge
+                        .call(Command::Transport {
+                            action: TransportAction::Play,
+                        })
+                        .await?;
+                    tokio::time::sleep(Duration::from_secs_f64(seconds)).await;
+                    bridge
+                        .call(Command::Transport {
+                            action: TransportAction::Stop,
+                        })
+                        .await?;
+                    Ok(())
+                },
+            )
+            .await;
+            if let Some(t) = solo {
+                self.call(Command::SetTrack {
+                    track: t,
+                    change: TrackChange {
+                        solo: Some(false),
+                        ..TrackChange::default()
+                    },
+                })
+                .await?;
+            }
+            result.map_err(err)?;
+            // the stream starts 0.4 s before the music: trim it
+            capture::encode(&wav, &file, format, 0.4)
+                .await
+                .map_err(err)?;
+            let loudness = capture::measure(&file).await.unwrap_or_default();
+            files.push(json!({
+                "part": label,
+                "path": file.display().to_string(),
+                "loudness": loudness,
+                "verdict": loudness.verdict(),
+            }));
+        }
+        out(&json!({"bars": bars, "seconds": seconds + tail, "files": files}))
+    }
+
+    #[tool(
+        description = "Save the project (Bitwig's Save; an unsaved project asks for a name in Bitwig)."
+    )]
+    async fn save_project(&self) -> ToolResult {
+        out(&self
+            .call(Command::InvokeAction { id: "Save".into() })
+            .await?)
+    }
+
+    #[tool(
+        description = "Open one of Bitwig's export dialogs for the user to finish: audio (offline render with all options), midi or dawproject (for other DAWs)."
+    )]
+    async fn open_export_dialog(&self, Parameters(a): Parameters<ExportDialogArgs>) -> ToolResult {
+        let id = match a.kind {
+            ExportKind::Audio => "Export Audio",
+            ExportKind::Midi => "export_midi",
+            ExportKind::Dawproject => "export_project",
+        };
+        out(&self.call(Command::InvokeAction { id: id.into() }).await?)
+    }
+
     // ------------------------------------------------------------ song plan
 
     #[tool(
@@ -2621,7 +2922,7 @@ mod tests {
     #[test]
     fn every_tool_has_a_description_and_the_set_is_small() {
         let tools = BridgeServer::tool_router().list_all();
-        assert!((20..=45).contains(&tools.len()), "{} tools", tools.len());
+        assert!((20..=50).contains(&tools.len()), "{} tools", tools.len());
         for t in &tools {
             assert!(
                 t.description.as_deref().is_some_and(|d| d.len() > 10),
