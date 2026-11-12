@@ -40,8 +40,10 @@ use std::path::Path;
 
 type ToolResult = Result<String, McpError>;
 
-/// How long to wait before resolving a name or clip a second time.
-const SETTLE_RETRY: Duration = Duration::from_millis(600);
+/// How long to wait before resolving a name, clip or device again, and how often (seen
+/// live: a new track needed over 600 ms to show up).
+const SETTLE_RETRY: Duration = Duration::from_millis(500);
+const SETTLE_ATTEMPTS: u32 = 3;
 
 fn err(e: impl std::fmt::Display) -> McpError {
     McpError::internal_error(e.to_string(), None)
@@ -960,16 +962,29 @@ impl BridgeServer {
         &self,
         f: impl Fn(&ProjectView) -> Result<T, String>,
     ) -> Result<(ProjectView, T), McpError> {
-        let v = self.view().await?;
-        match f(&v) {
-            Ok(t) => Ok((v, t)),
-            Err(_) => {
-                tokio::time::sleep(SETTLE_RETRY).await;
-                let v = self.view().await?;
-                let t = f(&v).map_err(bad)?;
-                Ok((v, t))
+        let mut attempt = 0;
+        loop {
+            let v = self.view().await?;
+            match f(&v) {
+                Ok(t) => return Ok((v, t)),
+                Err(e) if attempt >= SETTLE_ATTEMPTS => return Err(bad(e)),
+                Err(_) => {
+                    attempt += 1;
+                    tokio::time::sleep(SETTLE_RETRY).await;
+                }
             }
         }
+    }
+
+    /// A track and one of its devices, resolved together (with the same retries).
+    async fn track_device(&self, track: &Ref, device: &Ref) -> Result<(TrackAddr, u32), McpError> {
+        let (_, pair) = self
+            .resolve(|v| {
+                let t = v.track(track)?;
+                Ok((t, v.device(t, device)?))
+            })
+            .await?;
+        Ok(pair)
     }
 
     async fn track_of(&self, r: &Ref) -> Result<(ProjectView, TrackAddr), McpError> {
@@ -1060,8 +1075,28 @@ impl BridgeServer {
         at: Insert,
         source: DeviceSource,
     ) -> Result<Json, McpError> {
+        let wanted = match &source {
+            DeviceSource::Browser { name, .. } => Some(name.clone()),
+            _ => None,
+        };
         self.call_long(Command::InsertDevice { track, at, source })
             .await
+            .map_err(|mut e| {
+                let instrument = wanted
+                    .as_deref()
+                    .and_then(crate::devices::find)
+                    .is_some_and(|g| matches!(g.kind, "instrument" | "drum"));
+                if instrument && e.message.contains("no browser result") {
+                    e.message = format!(
+                        "{} (this position only takes effects: the track already has an \
+                         instrument there. Use at=replace with relative_to that instrument, or \
+                         a new track)",
+                        e.message
+                    )
+                    .into();
+                }
+                e
+            })
     }
 
     async fn page_index(
@@ -1815,8 +1850,7 @@ impl BridgeServer {
         description = "A device: enabled state, remote-control page names, and the 8 parameters of a page (name, value 0-1, display text)."
     )]
     async fn get_device(&self, Parameters(a): Parameters<DeviceArgs>) -> ToolResult {
-        let (view, track) = self.track_of(&a.track).await?;
-        let device = view.device(track, &a.device).map_err(bad)?;
+        let (track, device) = self.track_device(&a.track, &a.device).await?;
         let page = self.page_index(track, device, a.page.as_ref()).await?;
         out(&self
             .call(Command::GetDevice {
@@ -1834,8 +1868,7 @@ impl BridgeServer {
         if !(0.0..=1.0).contains(&a.value) {
             return Err(bad("value must be 0.0-1.0"));
         }
-        let (view, track) = self.track_of(&a.track).await?;
-        let device = view.device(track, &a.device).map_err(bad)?;
+        let (track, device) = self.track_device(&a.track, &a.device).await?;
         let page = self.page_index(track, device, a.page.as_ref()).await?;
         let param = match &a.param {
             Ref::Number(0) => return Err(bad("param numbers start at 1")),
@@ -1856,7 +1889,12 @@ impl BridgeServer {
                             .collect()
                     })
                     .unwrap_or_default();
-                pick(&names, name, "parameter")?
+                // the page can have gaps (Test Tone: 1, 2, 8): use the parameter's own index
+                let at = pick(&names, name, "parameter")? as usize;
+                d["params"][at]["index"]
+                    .as_u64()
+                    .and_then(|i| u32::try_from(i).ok())
+                    .ok_or_else(|| err("parameter without an index"))?
             }
         };
         out(&self
@@ -1874,8 +1912,7 @@ impl BridgeServer {
         description = "Device action: enable, disable, toggle, delete, duplicate, open_window, close_window, next_preset, previous_preset, select."
     )]
     async fn device_action(&self, Parameters(a): Parameters<DeviceActionArgs>) -> ToolResult {
-        let (view, track) = self.track_of(&a.track).await?;
-        let device = view.device(track, &a.device).map_err(bad)?;
+        let (track, device) = self.track_device(&a.track, &a.device).await?;
         out(&self
             .call(Command::DeviceAction {
                 track,
@@ -2373,9 +2410,8 @@ impl BridgeServer {
         if a.pads.is_empty() || a.pads.len() > 32 {
             return Err(bad("give 1-32 pads"));
         }
-        let (view, track) = self.track_of(&a.track).await?;
         let dref = a.device.unwrap_or_else(|| Ref::Name("Drum Machine".into()));
-        let device = view.device(track, &dref).map_err(bad)?;
+        let (track, device) = self.track_device(&a.track, &dref).await?;
         let registry = self.profiles();
         let gm = registry.get("generic");
         let mut plan = Vec::new();
@@ -2864,7 +2900,8 @@ mod tests {
             Some("get_song_plan") => Ok(json!({"text": "{\"key\":\"A minor\"}"})),
             Some("get_device") => Ok(json!({
                 "pages": ["Main", "Filter"],
-                "params": [{"name": "Cutoff"}, {"name": "Resonance"}]
+                // a page with a gap, like Bitwig's Test Tone (parameters 1, 2 and 8)
+                "params": [{"name": "Cutoff", "index": 0}, {"name": "Resonance", "index": 7}]
             })),
             Some("insert_device") if req["source"]["name"] == "Nope" => Err("not found".into()),
             _ => Ok(req.clone()),
@@ -3324,7 +3361,8 @@ mod tests {
         let req = &sent(&log, "set_device_param")[0];
         assert_eq!(
             (req["page"].clone(), req["param"].clone()),
-            (json!(1), json!(1))
+            (json!(1), json!(7)),
+            "the parameter's own index, not its place in the list"
         );
     }
 

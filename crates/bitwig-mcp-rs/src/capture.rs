@@ -144,6 +144,44 @@ pub fn have(program: &str) -> bool {
         .is_ok()
 }
 
+/// The two output ports of `node` that feed the audio interface, left first: read from
+/// `pw-link -l`. Bitwig exposes many outputs (its master went out on `out1` and `out3`
+/// here); recording the whole node made PipeWire downmix them, 12 dB too quiet.
+#[must_use]
+pub fn master_ports(pw_links: &str, node: &str) -> Vec<String> {
+    let prefix = format!("{node}:");
+    let mut current: Option<&str> = None;
+    // (target port, source port) for links from the node to a playback port
+    let mut links: Vec<(String, String)> = Vec::new();
+    for line in pw_links.lines() {
+        if !line.starts_with(' ') {
+            current = Some(line.trim());
+            continue;
+        }
+        let Some(target) = line.trim().strip_prefix("|->") else {
+            continue;
+        };
+        let target = target.trim();
+        if let Some(src) = current.filter(|c| c.starts_with(&prefix))
+            && target.contains(":playback_")
+        {
+            links.push((target.to_owned(), src.to_owned()));
+        }
+    }
+    // order by the device's channel (AUX0 < AUX1, FL < FR are both in name order)
+    links.sort();
+    let mut out: Vec<String> = Vec::new();
+    for (_, src) in links {
+        if !out.contains(&src) {
+            out.push(src);
+        }
+        if out.len() == 2 {
+            break;
+        }
+    }
+    out
+}
+
 /// Records `node`'s output to a 32-bit float WAV while `during` runs, plus `tail` seconds.
 ///
 /// # Errors
@@ -159,27 +197,48 @@ where
     if let Some(dir) = wav.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     }
-    let mut child = tokio::process::Command::new("pw-record")
-        .args([
-            "--target",
-            node,
-            "--channels",
-            "2",
-            "--rate",
-            "48000",
-            "--format",
-            "f32",
-        ])
+    // link exactly the master pair when it can be found, else let PipeWire pick
+    let links = tokio::process::Command::new("pw-link")
+        .arg("-l")
+        .output()
+        .await
+        .ok();
+    let ports = links
+        .map(|o| master_ports(&String::from_utf8_lossy(&o.stdout), node))
+        .unwrap_or_default();
+    let capture_name = format!("bitwig-mcp-capture-{}", std::process::id());
+    let mut cmd = tokio::process::Command::new("pw-record");
+    if ports.len() == 2 {
+        cmd.args(["--target", "0", "-P"])
+            .arg(format!("{{ node.name = {capture_name} }}"));
+    } else {
+        cmd.args(["--target", node]);
+    }
+    let mut child = cmd
+        .args(["--channels", "2", "--rate", "48000", "--format", "f32"])
         .arg(wav)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .context("cannot start pw-record (install PipeWire's tools)")?;
-    // let the stream connect before the music starts
+    // let the stream appear before linking and before the music starts
     tokio::time::sleep(Duration::from_millis(400)).await;
     if let Ok(Some(status)) = child.try_wait() {
         bail!("pw-record stopped at once ({status}): is Bitwig running on PipeWire as {node:?}?");
+    }
+    if ports.len() == 2 {
+        for (src, dst) in ports.iter().zip(["input_FL", "input_FR"]) {
+            let ok = tokio::process::Command::new("pw-link")
+                .arg(src)
+                .arg(format!("{capture_name}:{dst}"))
+                .status()
+                .await
+                .is_ok_and(|s| s.success());
+            if !ok {
+                bail!("cannot link {src} to the recorder");
+            }
+        }
     }
     let outcome = during().await;
     tokio::time::sleep(tail).await;
@@ -285,6 +344,30 @@ True peak:\n    Peak:       -0.4 dBFS\n";
         assert!(v(-5.0).contains("loud"));
         assert_eq!(v(-12.0), "-12.0 LUFS");
         assert!(Loudness::default().verdict().contains("no loudness"));
+    }
+
+    #[test]
+    fn finds_the_master_pair_in_link_order() {
+        let links = "\
+alsa_output.usb-X.multichannel-output:playback_AUX0
+  |<- Bitwig Studio:out1
+Bitwig Studio:out3
+  |-> alsa_output.usb-X.multichannel-output:playback_AUX1
+Bitwig Studio:out1
+  |-> alsa_output.usb-X.multichannel-output:playback_AUX0
+Bitwig Studio:in3
+  |<- alsa_input.usb-X.analog-surround-21:capture_FL
+Brave:output_FL
+  |-> alsa_output.pci.analog-stereo:playback_FL
+";
+        assert_eq!(
+            master_ports(links, "Bitwig Studio"),
+            ["Bitwig Studio:out1", "Bitwig Studio:out3"]
+        );
+        assert!(master_ports(links, "Ardour").is_empty());
+        assert!(master_ports("", "Bitwig Studio").is_empty());
+        let mono = "Bitwig Studio:out1\n  |-> sink:playback_FL\n  |-> sink:playback_FR\n";
+        assert_eq!(master_ports(mono, "Bitwig Studio"), ["Bitwig Studio:out1"]);
     }
 
     #[test]
