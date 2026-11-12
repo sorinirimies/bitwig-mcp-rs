@@ -97,8 +97,6 @@ public class BridgeExtension extends ControllerExtension
    /** Notes of the cursor clip by x * GRID_KEYS + key, as reported by Bitwig. */
    private final Map<Integer, NoteStep> notes = new HashMap<>();
    private double gridStep = 0.25;
-   /** "bank:index:slot" of the clip the cursor clip was last pointed at. */
-   private String focusedClip = "";
 
    protected BridgeExtension(final BridgeExtensionDefinition definition, final ControllerHost host)
    {
@@ -1219,13 +1217,8 @@ public class BridgeExtension extends ControllerExtension
       final ClipLauncherSlot s = slot(a, i);
       if (!s.hasContent().get())
          throw new IllegalArgumentException("slot " + (i + 1) + " is empty");
-      final String id = a.bank + ":" + a.index + ":" + i;
-      if (!id.equals(focusedClip))
-      {
-         // a different clip: forget the old one's notes; the observer reports the new ones
-         focusedClip = id;
-         notes.clear();
-      }
+      // The note map is never cleared: Bitwig reports only grid cells that change (new clip,
+      // new step size), so a cell equal in both would be lost after a clear.
       cursorTrack.selectChannel(a.track);
       s.select();
       waitFor(() -> a.selected.get() && cursorClip.exists().get()
@@ -1239,7 +1232,6 @@ public class BridgeExtension extends ControllerExtension
       if (step != gridStep)
       {
          gridStep = step;
-         notes.clear();
          cursorClip.setStepSize(step);
       }
    }

@@ -168,22 +168,6 @@ fn unit(name: &str, v: Option<f64>) -> Result<Option<f64>, McpError> {
     }
 }
 
-/// Parses a grid resolution like "1/16" or "0.25" (beats).
-fn parse_resolution(s: &str) -> Result<f64, McpError> {
-    let v = match s.split_once('/') {
-        Some((n, d)) => {
-            let n: f64 = n.trim().parse().map_err(|_| bad("bad resolution"))?;
-            let d: f64 = d.trim().parse().map_err(|_| bad("bad resolution"))?;
-            n / d
-        }
-        None => s.trim().parse().map_err(|_| bad("bad resolution"))?,
-    };
-    if !(1.0 / 64.0..=4.0).contains(&v) {
-        return Err(bad("resolution must be between 1/64 and 4 beats"));
-    }
-    Ok(v)
-}
-
 // ---------------------------------------------------------------- parameters
 
 /// A track.
@@ -382,7 +366,8 @@ pub struct ReadNotesArgs {
     pub track: Ref,
     /// Slot: 1-based number or scene name.
     pub slot: Ref,
-    /// Grid to read on, e.g. "1/16" (default) or "1/32"; starts are reported on this grid.
+    /// Grid as a note value: "1/16" (default, a sixteenth note), "1/32", "1/8T"; starts are
+    /// reported on this grid.
     pub resolution: Option<String>,
 }
 
@@ -1556,12 +1541,7 @@ impl BridgeServer {
         description = "Read the notes of a clip: [{note, name, start, length, velocity}] in beats, starts on the given grid (default 1/16)."
     )]
     async fn read_notes(&self, Parameters(a): Parameters<ReadNotesArgs>) -> ToolResult {
-        let step = a
-            .resolution
-            .as_deref()
-            .map(parse_resolution)
-            .transpose()?
-            .unwrap_or(0.25);
+        let step = parse_step(a.resolution.as_deref(), 0.25)?;
         let (view, track) = self.track_of(&a.track).await?;
         let slot = view.slot(&a.slot).map_err(bad)?;
         let r = self.call(Command::ReadNotes { track, slot, step }).await?;
@@ -2599,11 +2579,9 @@ mod tests {
 
     #[test]
     fn resolutions() {
-        assert_eq!(parse_resolution("1/16").ok(), Some(1.0 / 16.0));
-        assert_eq!(parse_resolution("0.5").ok(), Some(0.5));
-        assert!(parse_resolution("1/128").is_err());
-        assert!(parse_resolution("x").is_err());
-        assert!(parse_resolution("1/0").is_err());
+        // note values, like every other step argument: "1/16" is a sixteenth note
+        assert_eq!(parse_step(Some("1/16"), 1.0).ok(), Some(0.25));
+        assert!(parse_step(Some("1/0"), 1.0).is_err());
     }
 
     #[test]

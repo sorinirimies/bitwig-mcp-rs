@@ -144,7 +144,7 @@ fn build_play_and_clean_up() {
     );
     let read = s.tool(
         "read_notes",
-        json!({"track": NAME, "slot": slot, "resolution": "1/4"}),
+        json!({"track": NAME, "slot": slot, "resolution": "1/8"}),
     );
     let starts: Vec<f64> = read["notes"]
         .as_array()
