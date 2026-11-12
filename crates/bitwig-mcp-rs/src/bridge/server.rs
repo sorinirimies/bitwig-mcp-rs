@@ -40,6 +40,9 @@ use std::path::Path;
 
 type ToolResult = Result<String, McpError>;
 
+/// How long to wait before resolving a name or clip a second time.
+const SETTLE_RETRY: Duration = Duration::from_millis(600);
+
 fn err(e: impl std::fmt::Display) -> McpError {
     McpError::internal_error(e.to_string(), None)
 }
@@ -63,9 +66,6 @@ a track, then use play_notes / hardware_set / hardware_program_change on that tr
 list_actions + invoke_action reach every Bitwig menu command (save, export, ...).";
 
 // ---------------------------------------------------------------- pure helpers
-
-/// Bitwig 6's browser tab with Bitwig's own presets.
-const PRESETS_TAB: &str = "Bitwig Presets";
 
 /// Parses a color: `#rrggbb`, `rrggbb`, or a basic name.
 ///
@@ -147,6 +147,22 @@ pub fn parse_sysex(hex: &str) -> Result<Vec<u8>, String> {
             Ok(bytes)
         }
         _ => Err("SysEx must start with F0, end with F7 and hold 1-4095 data bytes".into()),
+    }
+}
+
+/// A send level as normalized or dB (sends top out at 0 dB); dB wins when both are given.
+fn send_volume_of(volume: Option<f64>, volume_db: Option<f64>) -> Result<Option<f64>, McpError> {
+    if let Some(db) = volume_db {
+        if db.is_nan() {
+            return Err(bad("volume_db is not a number"));
+        }
+        return Ok(Some(music::send_db_to_volume(db)));
+    }
+    match volume {
+        Some(v) if !(0.0..=1.0).contains(&v) => {
+            Err(bad("volume must be 0.0-1.0 (or use volume_db)"))
+        }
+        other => Ok(other),
     }
 }
 
@@ -937,10 +953,27 @@ impl BridgeServer {
         Ok(self.project().await?.1)
     }
 
-    async fn track_of(&self, r: &Ref) -> Result<(ProjectView, TrackAddr), McpError> {
+    /// Resolves against a fresh snapshot; when that fails, waits a moment and tries once more.
+    /// Bitwig reports a change (a rename, a new clip) a little after the call that made it, so
+    /// the very next call can see the old state (seen live: rename then insert_device).
+    async fn resolve<T>(
+        &self,
+        f: impl Fn(&ProjectView) -> Result<T, String>,
+    ) -> Result<(ProjectView, T), McpError> {
         let v = self.view().await?;
-        let t = v.track(r).map_err(bad)?;
-        Ok((v, t))
+        match f(&v) {
+            Ok(t) => Ok((v, t)),
+            Err(_) => {
+                tokio::time::sleep(SETTLE_RETRY).await;
+                let v = self.view().await?;
+                let t = f(&v).map_err(bad)?;
+                Ok((v, t))
+            }
+        }
+    }
+
+    async fn track_of(&self, r: &Ref) -> Result<(ProjectView, TrackAddr), McpError> {
+        self.resolve(|v| v.track(r)).await
     }
 
     fn profiles(&self) -> Registry {
@@ -1451,7 +1484,7 @@ impl BridgeServer {
         let source = match (a.device, a.preset) {
             (_, Some(p)) => Some(DeviceSource::Browser {
                 name: p,
-                content_type: Some(PRESETS_TAB.into()),
+                content_type: None,
             }),
             (Some(d), None) => Some(DeviceSource::Browser {
                 name: d,
@@ -1485,7 +1518,7 @@ impl BridgeServer {
         let mut sends = Vec::new();
         for s in &a.sends {
             let index = view.send(track, &s.send).map_err(bad)?;
-            let volume = volume_of(s.volume, s.volume_db)?
+            let volume = send_volume_of(s.volume, s.volume_db)?
                 .ok_or_else(|| bad("each send needs volume or volume_db"))?;
             sends.push(SendLevel { index, volume });
         }
@@ -1557,7 +1590,7 @@ impl BridgeServer {
 
     #[tool(description = "Rename or recolor a scene.")]
     async fn set_scene(&self, Parameters(a): Parameters<SetSceneArgs>) -> ToolResult {
-        let scene = self.view().await?.scene(&a.scene).map_err(bad)?;
+        let (_, scene) = self.resolve(|v| v.scene(&a.scene)).await?;
         let color = a
             .color
             .as_deref()
@@ -1575,7 +1608,7 @@ impl BridgeServer {
 
     #[tool(description = "Scene action: launch, select, duplicate, delete.")]
     async fn scene_action(&self, Parameters(a): Parameters<SceneActionArgs>) -> ToolResult {
-        let scene = self.view().await?.scene(&a.scene).map_err(bad)?;
+        let (_, scene) = self.resolve(|v| v.scene(&a.scene)).await?;
         out(&self
             .call(Command::SceneAction {
                 scene,
@@ -1764,7 +1797,7 @@ impl BridgeServer {
             },
             (None, Some(name), None, None, None) => DeviceSource::Browser {
                 name,
-                content_type: Some(PRESETS_TAB.into()),
+                content_type: None,
             },
             (None, None, Some(id), None, None) => DeviceSource::Clap { id },
             (None, None, None, Some(id), None) => DeviceSource::Vst3 { id },
@@ -2135,11 +2168,17 @@ impl BridgeServer {
         if a.ops.is_empty() {
             return Err(bad("ops is empty"));
         }
-        let (view, track) = self.track_of(&a.track).await?;
-        let slot = view.slot(&a.slot).map_err(bad)?;
-        if !view.has_clip(track, slot) {
-            return Err(bad(format!("slot {} has no clip", slot + 1)));
-        }
+        let (_, (track, slot)) = self
+            .resolve(|v| {
+                let track = v.track(&a.track)?;
+                let slot = v.slot(&a.slot)?;
+                if v.has_clip(track, slot) {
+                    Ok((track, slot))
+                } else {
+                    Err(format!("slot {} has no clip", slot + 1))
+                }
+            })
+            .await?;
         let (notes, length) = self.read_clip_notes(track, slot).await?;
         if notes.is_empty() {
             return Err(bad("the clip has no notes"));
@@ -2344,7 +2383,6 @@ impl BridgeServer {
             plan.push((voice_key(gm, pad)?, pad.clone(), name.clone()));
         }
         let mut done = Vec::new();
-        let mut last = Json::Null;
         for (key, pad, name) in plan {
             match self
                 .call_long(Command::DrumPadInsert {
@@ -2358,14 +2396,21 @@ impl BridgeServer {
                 })
                 .await
             {
-                Ok(r) => {
-                    last = r;
-                    done.push(json!({"pad": pad, "key": key, "device": name}));
-                }
+                Ok(_) => done.push(json!({"pad": pad, "key": key, "device": name})),
                 Err(e) => done.push(json!({"pad": pad, "key": key, "error": e.message})),
             }
         }
-        out(&json!({"pads": done, "drum_pads_now": last["drum_pads"]}))
+        // the cursor device moves into the pad it filled: ask for the drum machine itself
+        let machine = self
+            .call(Command::GetDevice {
+                track,
+                device,
+                page: None,
+            })
+            .await
+            .map(|d| d["drum_pads"].clone())
+            .unwrap_or(Json::Null);
+        out(&json!({"pads": done, "drum_pads_now": machine}))
     }
 
     // ------------------------------------------------------------ export

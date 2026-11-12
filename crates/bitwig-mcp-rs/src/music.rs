@@ -26,6 +26,23 @@ pub fn volume_to_db(x: f64) -> f64 {
     20.0 * (2.0 * x * x * x).log10()
 }
 
+/// dB to a normalized **send** level. A send shows the fader curve 6 dB lower, so it tops
+/// out at 0 dB: measured in Bitwig 6, normalized 0.46379 is "-14.0 dB" on a fader and
+/// "-20.0 dB" on a send.
+#[must_use]
+pub fn send_db_to_volume(db: f64) -> f64 {
+    db_to_volume(db + SEND_OFFSET_DB)
+}
+
+/// Inverse of [`send_db_to_volume`]; 0 gives negative infinity.
+#[must_use]
+pub fn send_volume_to_db(x: f64) -> f64 {
+    volume_to_db(x) - SEND_OFFSET_DB
+}
+
+/// How much lower a send reads than a fader at the same normalized value.
+const SEND_OFFSET_DB: f64 = 6.0;
+
 const NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
@@ -154,6 +171,24 @@ pub fn choose_grid(starts: &[f64]) -> Result<Grid, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn send_levels_match_bitwig() {
+        // values Bitwig 6 displayed for these normalized send levels
+        for (x, db) in [
+            (0.463_792_087_1, -20.0),
+            (0.680_753_685_8, -10.0),
+            (0.583_879_644_3, -14.0),
+            (0.707_386_338_4, -9.0),
+        ] {
+            assert!((send_volume_to_db(x) - db).abs() < 0.01, "{x} -> {db}");
+            assert!((send_db_to_volume(db) - x).abs() < 1e-9, "{db} -> {x}");
+        }
+        assert!(send_db_to_volume(0.0) > 0.999, "0 dB is the top of a send");
+        assert_eq!(send_db_to_volume(6.0), 1.0, "clamped");
+        assert_eq!(send_db_to_volume(f64::NEG_INFINITY), 0.0);
+        assert_eq!(send_volume_to_db(0.0), f64::NEG_INFINITY);
+    }
 
     #[test]
     fn db_round_trip() {

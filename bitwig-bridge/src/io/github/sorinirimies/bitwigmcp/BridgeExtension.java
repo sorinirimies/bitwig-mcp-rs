@@ -1502,6 +1502,17 @@ public class BridgeExtension extends ControllerExtension
       });
    }
 
+   /** Scrolls the results one page and continues once Bitwig has moved and refreshed the
+    * names: reading on a timer skipped or repeated pages (seen: presets missing from
+    * list_devices). */
+   private void nextPage(final Reply r, final Runnable then)
+   {
+      final int before = results.scrollPosition().get();
+      results.scrollPageForwards();
+      waitFor(() -> results.scrollPosition().get() != before, 3000, "the next results page", r,
+         () -> later(250, r, then));
+   }
+
    private void collect(final List<String> names, final int max, final int page, final Reply r)
    {
       for (int i = 0; i < RESULTS && names.size() < max; i++)
@@ -1512,13 +1523,12 @@ public class BridgeExtension extends ControllerExtension
       }
       if (names.size() < max && results.canScrollForwards().get() && page < MAX_PAGES)
       {
-         results.scrollPageForwards();
-         later(300, r, () -> collect(names, max, page + 1, r));
+         nextPage(r, () -> collect(names, max, page + 1, r));
          return;
       }
       final Map<String, Object> m = new LinkedHashMap<>();
       m.put("total", results.itemCount().get());
-      m.put("names", names);
+      m.put("names", new ArrayList<>(new java.util.LinkedHashSet<>(names)));
       browser.cancel();
       r.ok(m);
    }
@@ -1548,8 +1558,7 @@ public class BridgeExtension extends ControllerExtension
       final int found = prefix;
       if (results.canScrollForwards().get() && page < MAX_PAGES)
       {
-         results.scrollPageForwards();
-         later(300, r, () -> scan(needle, page + 1, found, similar, r, done));
+         nextPage(r, () -> scan(needle, page + 1, found, similar, r, done));
          return;
       }
       if (found < 0)
