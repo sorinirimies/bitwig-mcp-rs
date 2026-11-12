@@ -64,6 +64,9 @@ list_actions + invoke_action reach every Bitwig menu command (save, export, ...)
 
 // ---------------------------------------------------------------- pure helpers
 
+/// Bitwig 6's browser tab with Bitwig's own presets.
+const PRESETS_TAB: &str = "Bitwig Presets";
+
 /// Parses a color: `#rrggbb`, `rrggbb`, or a basic name.
 ///
 /// # Errors
@@ -895,6 +898,9 @@ pub struct BridgeServer {
     profiles_dir: PathBuf,
     tool_router: ToolRouter<Self>,
     prompt_router: PromptRouter<Self>,
+    /// Bitwig has one selection, one browser and one cursor clip: tools run one at a time,
+    /// even when a client calls several in parallel.
+    turn: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl BridgeServer {
@@ -906,6 +912,7 @@ impl BridgeServer {
             profiles_dir,
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
+            turn: Arc::default(),
         }
     }
 
@@ -1444,7 +1451,7 @@ impl BridgeServer {
         let source = match (a.device, a.preset) {
             (_, Some(p)) => Some(DeviceSource::Browser {
                 name: p,
-                content_type: Some("Presets".into()),
+                content_type: Some(PRESETS_TAB.into()),
             }),
             (Some(d), None) => Some(DeviceSource::Browser {
                 name: d,
@@ -1757,7 +1764,7 @@ impl BridgeServer {
             },
             (None, Some(name), None, None, None) => DeviceSource::Browser {
                 name,
-                content_type: Some("Presets".into()),
+                content_type: Some(PRESETS_TAB.into()),
             },
             (None, None, Some(id), None, None) => DeviceSource::Clap { id },
             (None, None, None, Some(id), None) => DeviceSource::Vst3 { id },
@@ -2713,6 +2720,16 @@ const RESOURCES: [(&str, &str, &str); 4] = [
 #[tool_handler(router = self.tool_router)]
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for BridgeServer {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        let _turn = self.turn.lock().await;
+        let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(call).await
+    }
+
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(
             ServerCapabilities::builder()
