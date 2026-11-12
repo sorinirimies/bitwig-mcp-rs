@@ -4,6 +4,12 @@ All notable changes to this project are documented here. It is generated from
 [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org) — do not edit it by hand.
 
+## [0.2.2](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.2.1...v0.2.2) — 2026-11-12
+
+### 📚 Documentation
+
+- README lists every tool group, the arrangement flow and the bump step ([`10dfd98`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/10dfd98d0ae23735d16f17129db6de0ff02f6e55))
+
 ## [0.2.1](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.2.0...v0.2.1) — 2026-11-12
 
 ### 🧪 Tests
