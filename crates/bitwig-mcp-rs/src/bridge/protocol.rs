@@ -354,6 +354,13 @@ pub enum Command {
     Hello,
     /// Full snapshot: transport, application, tracks, effect tracks, master, scenes.
     GetProject,
+    /// Peak level of every track (and the master) since the last read, 0-1 on Bitwig's meter
+    /// scale. With `window_ms` the levels are cleared first and read after that time.
+    GetMeters {
+        /// Measuring time in milliseconds (0 = what built up since the last read).
+        #[serde(default)]
+        window_ms: u32,
+    },
     /// Run a transport action.
     Transport {
         /// The action.
@@ -534,6 +541,9 @@ pub enum Command {
         key: u8,
         /// What to insert.
         source: DeviceSource,
+        /// Add after what the pad already holds (an effect) instead of replacing the pad.
+        #[serde(default)]
+        append: bool,
     },
     /// The names in a browser tab (opened on the track, then cancelled).
     ListBrowser {

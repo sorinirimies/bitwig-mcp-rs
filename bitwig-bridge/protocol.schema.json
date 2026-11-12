@@ -516,6 +516,26 @@
         "type": "object"
       },
       {
+        "description": "Peak level of every track (and the master) since the last read, 0-1 on Bitwig's meter\nscale. With `window_ms` the levels are cleared first and read after that time.",
+        "properties": {
+          "cmd": {
+            "const": "get_meters",
+            "type": "string"
+          },
+          "window_ms": {
+            "default": 0,
+            "description": "Measuring time in milliseconds (0 = what built up since the last read).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "type": "object"
+      },
+      {
         "description": "Run a transport action.",
         "properties": {
           "action": {
@@ -1407,6 +1427,11 @@
       {
         "description": "Put a device into one pad of a drum machine (the pad of MIDI key `key`).",
         "properties": {
+          "append": {
+            "default": false,
+            "description": "Add after what the pad already holds (an effect) instead of replacing the pad.",
+            "type": "boolean"
+          },
           "cmd": {
             "const": "drum_pad_insert",
             "type": "string"

@@ -101,6 +101,8 @@ public class BridgeExtension extends ControllerExtension
    /** Notes of the cursor clip by x * GRID_KEYS + key, as reported by Bitwig. */
    private final Map<Integer, NoteStep> notes = new HashMap<>();
    private double gridStep = 0.25;
+   /** Highest VU level (0-127) of each track by "bank:index" since the last read. */
+   private final Map<String, Integer> peaks = new HashMap<>();
 
    protected BridgeExtension(final BridgeExtensionDefinition definition, final ControllerHost host)
    {
@@ -280,6 +282,7 @@ public class BridgeExtension extends ControllerExtension
          t.volume().value(), t.volume().value().displayedValue(), t.pan().value(),
          t.pan().value().displayedValue(), t.mute(), t.solo(), t.position());
       mark(optional(t::arm), optional(t::monitorMode));
+      t.addVuMeterObserver(128, -1, true, v -> peaks.merge(key, v, Math::max));
       final SendBank sends = optional(t::sendBank);
       if (sends != null)
       {
@@ -460,6 +463,16 @@ public class BridgeExtension extends ControllerExtension
          case "get_project":
             r.ok(projectSnapshot());
             return;
+         case "get_meters":
+         {
+            final int window = q.has("window_ms") ? q.integer("window_ms") : 0;
+            if (window < 0 || window > 60000)
+               throw new IllegalArgumentException("window_ms must be 0-60000");
+            if (window > 0)
+               peaks.clear();
+            later(window, r, () -> r.ok(metersSnapshot()));
+            return;
+         }
          case "transport":
             transportAction(q.str("action"));
             later(SETTLE_MS, r, () -> r.ok(transportSnapshot()));
@@ -756,6 +769,34 @@ public class BridgeExtension extends ControllerExtension
    {
       return String.format("#%02x%02x%02x", Math.round(c.red() * 255), Math.round(c.green() * 255),
          Math.round(c.blue() * 255));
+   }
+
+   /** The peak level of every track since the last read, 0-1 on Bitwig's meter scale. */
+   private Map<String, Object> metersSnapshot()
+   {
+      final List<Object> list = new ArrayList<>();
+      for (int i = 0; i < TRACKS; i++)
+         if (isRegular(i))
+            list.add(meter("main", i, mainBank.getItemAt(i)));
+      for (int i = 0; i < FX_TRACKS; i++)
+         if (fxBank.getItemAt(i).exists().get())
+            list.add(meter("effect", i, fxBank.getItemAt(i)));
+      list.add(meter("master", 0, master));
+      peaks.clear();
+      final Map<String, Object> m = new LinkedHashMap<>();
+      m.put("playing", transport.isPlaying().get());
+      m.put("meters", list);
+      return m;
+   }
+
+   private Map<String, Object> meter(final String bank, final int i, final Track t)
+   {
+      final Map<String, Object> m = new LinkedHashMap<>();
+      m.put("bank", bank);
+      m.put("index", i);
+      m.put("name", t.name().get());
+      m.put("peak", peaks.getOrDefault(bank + ":" + i, 0) / 127.0);
+      return m;
    }
 
    private Map<String, Object> projectSnapshot()
@@ -1432,15 +1473,17 @@ public class BridgeExtension extends ControllerExtension
 
    private static final int MAX_PAGES = 150;
 
-   /** Fills one pad (scrolled to 0, so index = key); an occupied pad is cleared first. */
+   /** Fills one pad (scrolled to 0, so index = key); an occupied pad is cleared first, unless
+    * `append`: the device then goes to the end of the pad's chain (an effect after its instrument). */
    private void insertPad(final Json.Obj q, final int key, final Reply r)
    {
       final com.bitwig.extension.controller.api.DrumPad pad = drumPads.getItemAt(key);
-      final boolean occupied = pad.exists().get() && !pad.name().get().isEmpty();
+      final boolean append = q.has("append") && q.bool("append");
+      final boolean occupied = !append && pad.exists().get() && !pad.name().get().isEmpty();
       if (occupied)
          pad.deleteObject();
       later(occupied ? 300 : 0, r, () -> {
-         final InsertionPoint ip = pad.insertionPoint();
+         final InsertionPoint ip = append ? pad.endOfDeviceChainInsertionPoint() : pad.insertionPoint();
          final Json.Obj src = q.obj("source");
          final Runnable done = () -> later(600, r, () -> r.ok(cursorDeviceSnapshot()));
          switch (src.str("kind"))

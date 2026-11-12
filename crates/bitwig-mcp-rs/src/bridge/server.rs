@@ -1111,7 +1111,21 @@ pub struct DrumKitArgs {
     /// Pad → device to load, e.g. {"kick": "v8 Kick", "snare": "v8 Snare", "clap": "v8 Clap",
     /// "closed_hat": "v8 Hat", "open_hat": "v8 Hat"}. Pads are General MIDI key names, note
     /// names ("C1") or numbers.
+    #[serde(default)]
     pub pads: std::collections::BTreeMap<String, String>,
+    /// Effects added after a pad's instrument, in order, e.g. {"snare": ["Gate", "Reverb"]} for
+    /// the gated 80s snare. Works on pads that already have an instrument (also from an earlier
+    /// call).
+    #[serde(default)]
+    pub effects: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// Levels.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct MetersArgs {
+    /// Measure for this many milliseconds (default 0 = the peaks since the last read). Start
+    /// playback first, e.g. launch a scene, and measure a bar or two.
+    pub window_ms: Option<u32>,
 }
 
 /// Device listing.
@@ -2305,6 +2319,25 @@ impl BridgeServer {
     }
 
     #[tool(
+        description = "Peak levels (0-1 on Bitwig's meter scale) of every track and the master. With window_ms the meters are cleared and read after that time: start playback, measure a bar or two, see which track is loud. For LUFS and true peak of the whole mix use capture_audio."
+    )]
+    async fn get_meters(&self, Parameters(a): Parameters<MetersArgs>) -> ToolResult {
+        let ms = a.window_ms.unwrap_or(0);
+        if ms > 60_000 {
+            return Err(bad("window_ms must be 0-60000"));
+        }
+        let r = self
+            .bridge
+            .call_with(
+                Command::GetMeters { window_ms: ms },
+                Duration::from_millis(u64::from(ms) + 10_000),
+            )
+            .await
+            .map_err(err)?;
+        out(&r)
+    }
+
+    #[tool(
         description = "Put a mastering chain on the master track: EQ-5, Compressor and Peak Limiter by default (or your devices). Then measure with capture_audio (LUFS, true peak), adjust with set_device_params, and measure again."
     )]
     async fn master_chain(&self, Parameters(a): Parameters<MasterChainArgs>) -> ToolResult {
@@ -2965,11 +2998,11 @@ impl BridgeServer {
     }
 
     #[tool(
-        description = "Fill a Drum Machine's pads with instruments, e.g. pads {\"kick\": \"v8 Kick\", \"snare\": \"v8 Snare\", \"closed_hat\": \"v8 Hat\"}. Pad names are the General MIDI keys write_drums uses, so a kit built here plays the drum patterns written there."
+        description = "Fill a Drum Machine's pads with instruments and add effects on single pads (effects {\"snare\": [\"Gate\", \"Reverb\"]}: the gated 80s snare), e.g. pads {\"kick\": \"v8 Kick\", \"snare\": \"v8 Snare\", \"closed_hat\": \"v8 Hat\"}. Pad names are the General MIDI keys write_drums uses, so a kit built here plays the drum patterns written there."
     )]
     async fn build_drum_kit(&self, Parameters(a): Parameters<DrumKitArgs>) -> ToolResult {
-        if a.pads.is_empty() || a.pads.len() > 32 {
-            return Err(bad("give 1-32 pads"));
+        if (a.pads.is_empty() && a.effects.is_empty()) || a.pads.len() > 32 {
+            return Err(bad("give 1-32 pads and/or effects"));
         }
         let dref = a.device.unwrap_or_else(|| Ref::Name("Drum Machine".into()));
         let (track, device) = self.track_device(&a.track, &dref).await?;
@@ -2990,11 +3023,34 @@ impl BridgeServer {
                         name: name.clone(),
                         content_type: None,
                     },
+                    append: false,
                 })
                 .await
             {
                 Ok(_) => done.push(json!({"pad": pad, "key": key, "device": name})),
                 Err(e) => done.push(json!({"pad": pad, "key": key, "error": e.message})),
+            }
+        }
+        let mut fx_done = Vec::new();
+        for (pad, names) in &a.effects {
+            let key = voice_key(gm, pad)?;
+            for name in names {
+                match self
+                    .call_long(Command::DrumPadInsert {
+                        track,
+                        device,
+                        key,
+                        source: DeviceSource::Browser {
+                            name: name.clone(),
+                            content_type: None,
+                        },
+                        append: true,
+                    })
+                    .await
+                {
+                    Ok(_) => fx_done.push(json!({"pad": pad, "effect": name})),
+                    Err(e) => fx_done.push(json!({"pad": pad, "effect": name, "error": e.message})),
+                }
             }
         }
         // the cursor device moves into the pad it filled: ask for the drum machine itself
@@ -3007,7 +3063,7 @@ impl BridgeServer {
             .await
             .map(|d| d["drum_pads"].clone())
             .unwrap_or(Json::Null);
-        out(&json!({"pads": done, "drum_pads_now": machine}))
+        out(&json!({"pads": done, "effects": fx_done, "drum_pads_now": machine}))
     }
 
     // ------------------------------------------------------------ export
@@ -3828,6 +3884,39 @@ mod tests {
                 .iter()
                 .any(|r| r["sends"][0]["volume"].is_number()),
         );
+    }
+
+    #[tokio::test]
+    async fn drum_kit_effects_append_to_the_pad() {
+        let (s, log) = rig().await;
+        let mut effects = std::collections::BTreeMap::new();
+        effects.insert(
+            "snare".to_owned(),
+            vec!["Gate".to_owned(), "Reverb".to_owned()],
+        );
+        s.build_drum_kit(Parameters(DrumKitArgs {
+            track: Ref::Name("drums".into()),
+            device: None,
+            pads: std::collections::BTreeMap::new(),
+            effects,
+        }))
+        .await
+        .expect("tool");
+        let sent = sent(&log, "drum_pad_insert");
+        assert_eq!(sent.len(), 2);
+        assert!(sent.iter().all(|r| r["append"] == true && r["key"] == 38));
+        assert_eq!(sent[1]["source"]["name"], "Reverb");
+    }
+
+    #[tokio::test]
+    async fn get_meters_passes_the_window() {
+        let (s, log) = rig().await;
+        s.get_meters(Parameters(MetersArgs {
+            window_ms: Some(50),
+        }))
+        .await
+        .expect("tool");
+        assert_eq!(sent(&log, "get_meters")[0]["window_ms"], 50);
     }
 
     #[tokio::test]
