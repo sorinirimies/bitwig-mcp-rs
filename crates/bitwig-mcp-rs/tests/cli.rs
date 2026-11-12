@@ -104,7 +104,7 @@ fn tools(args: &[&str]) -> (String, Vec<String>) {
 #[test]
 fn bridge_backend_speaks_mcp_without_bitwig() {
     // Nothing listens on the bridge port: the server must still start and list its tools.
-    let (name, names) = tools(&["--bridge-port", "1"]);
+    let (name, names) = tools(&["--bridge-port", "1", "--no-install-extension"]);
     assert_eq!(name, "bitwig-mcp-rs");
     for want in [
         "get_project",

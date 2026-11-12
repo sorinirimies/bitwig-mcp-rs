@@ -1,8 +1,8 @@
 [package]
 name = "bitwig-mcp-rs"
-description = "Rust MCP server that controls Bitwig Studio over OSC (DrivenByMoss)"
+description = "MCP server that lets AI assistants compose and produce in Bitwig Studio: tracks, clips, devices, mixing, music theory and hardware synths"
 readme = "../../README.md"
-keywords = ["bitwig", "mcp", "osc", "midi", "daw"]
+keywords = ["bitwig", "mcp", "midi", "daw", "music"]
 categories = ["command-line-utilities", "multimedia::audio"]
 version.workspace = true
 edition.workspace = true
@@ -22,6 +22,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+dirs = { workspace = true }
 rmcp = { workspace = true }
 rosc = { workspace = true }
 schemars = { workspace = true }

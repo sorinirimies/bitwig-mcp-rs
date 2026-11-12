@@ -58,7 +58,8 @@ settings).
 
 Options (flag or environment variable): `--backend` / `BITWIG_BACKEND` (bridge),
 `--host` / `BITWIG_HOST` (127.0.0.1), `--bridge-port` / `BITWIG_BRIDGE_PORT` (8417),
-`--instruments-dir` / `BITWIG_INSTRUMENTS_DIR` (`~/.config/bitwig-mcp-rs/instruments`);
+`--instruments-dir` / `BITWIG_INSTRUMENTS_DIR` (`<config dir>/bitwig-mcp-rs/instruments`: `~/.config` on Linux,
+`~/Library/Application Support` on macOS, `%APPDATA%` on Windows);
 for the OSC backend `--send-port` (8000), `--listen-port` (9000), `--resolution` (128),
 `--bank-size` (8). Logs go to stderr (`RUST_LOG=debug`).
 
@@ -89,7 +90,7 @@ and **Solina** (6), taken from their manuals' MIDI charts. These are analog: onl
 real CCs (attack, decay, sustain, glide, tempo); the others take notes, pitch bend and, on the
 Model D and Wasp, the mod wheel. Set each synth and its HW Instrument device to the profile's
 channel (or change the channel in your own copy). Your own TOML files go in
-`~/.config/bitwig-mcp-rs/instruments/` and replace a built-in profile of the same name
+the instruments folder (`list_instruments` shows it) and replace a built-in profile of the same name
 (format in the `synthazia-hardware` docs).
 
 SysEx can't travel through a track. For SysEx parameters (all Model D and Wasp settings: MIDI

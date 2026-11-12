@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use bitwig_mcp_rs::bridge::client::Bridge;
 use bitwig_mcp_rs::bridge::server::BridgeServer;
-use bitwig_mcp_rs::config::{Backend, Cli, Config, HELP};
+use bitwig_mcp_rs::config::{Backend, Cli, Config, Dirs, HELP};
 use bitwig_mcp_rs::extension;
 use bitwig_mcp_rs::osc::client::Bitwig;
 use bitwig_mcp_rs::osc::server::OscServer;
@@ -12,7 +12,11 @@ use rmcp::{ServiceExt, transport::stdio};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match Config::parse(std::env::args().skip(1), |k| std::env::var(k).ok()) {
+    match Config::parse(
+        std::env::args().skip(1),
+        |k| std::env::var(k).ok(),
+        &Dirs::system(),
+    ) {
         Ok(Cli::Help) => {
             println!("{HELP}");
             ExitCode::SUCCESS
@@ -55,11 +59,7 @@ async fn run(cfg: Config) -> Result<()> {
 
 /// `bitwig-mcp-rs install-extension`: install into `dir` or Bitwig's Extensions folder.
 fn install_extension(dir: Option<std::path::PathBuf>) -> ExitCode {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-    let dir = dir.or_else(|| {
-        home.and_then(|h| extension::bitwig_dir(std::env::consts::OS, std::path::Path::new(&h)))
-            .map(|b| b.join("Extensions"))
-    });
+    let dir = dir.or_else(|| extension::system_bitwig_dir().map(|b| b.join("Extensions")));
     let Some(dir) = dir else {
         eprintln!("error: cannot find Bitwig's user folder; pass --dir <Extensions folder>");
         return ExitCode::FAILURE;

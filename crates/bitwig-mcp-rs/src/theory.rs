@@ -664,6 +664,7 @@ pub enum ArpMode {
 }
 
 /// Arpeggiates each chord's voicing over `octaves` at `rate` beats per note.
+// each argument is a musical choice the tool exposes; a struct would only rename them
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn arpeggio(

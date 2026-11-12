@@ -1811,7 +1811,7 @@ impl BridgeServer {
     }
 
     #[tool(
-        description = "Hardware instrument profiles: built-in ones (generic General MIDI with a GM drum map; Behringer Model D, Crave, CAT, Wasp, Edge, Solina) plus ~/.config/bitwig-mcp-rs/instruments/*.toml. Each lists its MIDI channel, what it can do over MIDI (notes), its named parameters (CC, NRPN, RPN, pitch bend, pressure, SysEx; with range and named values) and named keys."
+        description = "Hardware instrument profiles: built-in ones (generic General MIDI with a GM drum map; Behringer Model D, Crave, CAT, Wasp, Edge, Solina) plus <config dir>/bitwig-mcp-rs/instruments/*.toml (the 'dir' it reports). Each lists its MIDI channel, what it can do over MIDI (notes), its named parameters (CC, NRPN, RPN, pitch bend, pressure, SysEx; with range and named values) and named keys."
     )]
     async fn list_instruments(&self) -> ToolResult {
         let reg = self.profiles();
@@ -2269,7 +2269,7 @@ impl BridgeServer {
                 "Help me use my {synth} from Bitwig.\n\
                  1. list_instruments: if a profile for the {synth} exists, use its channel, \
                  notes and parameters; otherwise write one (TOML, from its MIDI implementation \
-                 chart) for ~/.config/bitwig-mcp-rs/instruments/ and check it loads.\n\
+                 chart) for the instruments folder that list_instruments reports, and check it loads.\n\
                  2. create_track kind instrument named \"{synth}\" with device \"HW Instrument\".\n\
                  3. Tell me to pick the MIDI output port, the MIDI channel from the profile and \
                  the audio input in that device, and to set the synth to the same channel.\n\

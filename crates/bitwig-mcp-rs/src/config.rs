@@ -20,7 +20,8 @@ Options (each also reads the environment variable in brackets):
       --host <HOST>          Bitwig host                       [BITWIG_HOST, 127.0.0.1]
       --bridge-port <PORT>   Bridge extension TCP port         [BITWIG_BRIDGE_PORT, 8417]
       --instruments-dir <D>  Hardware instrument profiles      [BITWIG_INSTRUMENTS_DIR,
-                                                  ~/.config/bitwig-mcp-rs/instruments]
+                    <config dir>/bitwig-mcp-rs/instruments: ~/.config on Linux,
+                    ~/Library/Application Support on macOS, %APPDATA% on Windows]
       --no-install-extension Leave Bitwig's Extensions folder alone
                                                   [BITWIG_NO_INSTALL_EXTENSION]
   OSC backend (DrivenByMoss):
@@ -123,29 +124,43 @@ fn backend(v: &str) -> Result<Backend, UsageError> {
     }
 }
 
+/// The per-user folders the settings start from (from `dirs` in production).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Dirs {
+    /// The user's config folder (`~/.config`, `~/Library/Application Support`, `%APPDATA%`).
+    pub config: Option<std::path::PathBuf>,
+    /// Bitwig's user folder (`~/Bitwig Studio`, `Documents/Bitwig Studio`).
+    pub bitwig: Option<std::path::PathBuf>,
+}
+
+impl Dirs {
+    /// This machine's folders.
+    #[must_use]
+    pub fn system() -> Self {
+        Self {
+            config: dirs::config_dir(),
+            bitwig: crate::extension::system_bitwig_dir(),
+        }
+    }
+}
+
 impl Config {
     /// Builds the settings: environment first, then flags override.
     ///
     /// # Errors
     /// [`UsageError`] for an unknown flag, a missing or unparsable value, or a zero
     /// resolution / bank size.
-    pub fn parse<I, E>(args: I, env: E) -> Result<Cli, UsageError>
+    pub fn parse<I, E>(args: I, env: E, dirs: &Dirs) -> Result<Cli, UsageError>
     where
         I: IntoIterator<Item = String>,
         E: Fn(&str) -> Option<String>,
     {
         let mut cfg = Self::default();
-        let home = env("HOME").or_else(|| env("USERPROFILE"));
-        cfg.bitwig_dir = home.as_deref().and_then(|h| {
-            crate::extension::bitwig_dir(std::env::consts::OS, std::path::Path::new(h))
-        });
+        cfg.bitwig_dir.clone_from(&dirs.bitwig);
         if env("BITWIG_NO_INSTALL_EXTENSION").is_some_and(|v| !v.is_empty() && v != "0") {
             cfg.install_extension = false;
         }
-        let config_home = env("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| home.map(|h| std::path::Path::new(&h).join(".config")));
-        if let Some(c) = config_home {
+        if let Some(c) = &dirs.config {
             cfg.instruments_dir = c.join("bitwig-mcp-rs").join("instruments");
         }
         if let Some(v) = env("BITWIG_INSTRUMENTS_DIR") {
@@ -227,7 +242,11 @@ mod tests {
     }
 
     fn parse(args: &[&str]) -> Result<Cli, UsageError> {
-        Config::parse(args.iter().map(|s| (*s).to_owned()), no_env)
+        Config::parse(
+            args.iter().map(|s| (*s).to_owned()),
+            no_env,
+            &Dirs::default(),
+        )
     }
 
     #[test]
@@ -253,36 +272,34 @@ mod tests {
     }
 
     #[test]
-    fn instruments_dir_follows_xdg_then_home() {
-        let env = |k: &str| match k {
-            "HOME" => Some("/home/u".to_owned()),
-            _ => None,
+    fn folders_come_from_dirs_and_env_wins() {
+        let dirs = Dirs {
+            config: Some("/cfg".into()),
+            bitwig: Some("/home/u/Bitwig Studio".into()),
         };
-        let Ok(Cli::Run(c)) = Config::parse(Vec::new(), env) else {
-            panic!()
-        };
-        assert_eq!(
-            c.instruments_dir,
-            std::path::PathBuf::from("/home/u/.config/bitwig-mcp-rs/instruments")
-        );
-        let env = |k: &str| match k {
-            "HOME" => Some("/home/u".to_owned()),
-            "XDG_CONFIG_HOME" => Some("/cfg".to_owned()),
-            _ => None,
-        };
-        let Ok(Cli::Run(c)) = Config::parse(Vec::new(), env) else {
+        let Ok(Cli::Run(c)) = Config::parse(Vec::new(), |_: &str| None, &dirs) else {
             panic!()
         };
         assert_eq!(
             c.instruments_dir,
             std::path::PathBuf::from("/cfg/bitwig-mcp-rs/instruments")
         );
+        assert_eq!(c.bitwig_dir, dirs.bitwig);
+        let env = |k: &str| (k == "BITWIG_INSTRUMENTS_DIR").then(|| "/mine".to_owned());
+        let Ok(Cli::Run(c)) = Config::parse(Vec::new(), env, &dirs) else {
+            panic!()
+        };
+        assert_eq!(c.instruments_dir, std::path::PathBuf::from("/mine"));
     }
 
     #[test]
     fn flags_override_env() {
         let env = |k: &str| (k == "BITWIG_SEND_PORT").then(|| "1111".to_owned());
-        let cli = Config::parse(["--send-port".to_owned(), "2222".to_owned()], env);
+        let cli = Config::parse(
+            ["--send-port".to_owned(), "2222".to_owned()],
+            env,
+            &Dirs::default(),
+        );
         let Ok(Cli::Run(cfg)) = cli else {
             panic!("expected Run, got {cli:?}")
         };
@@ -292,7 +309,7 @@ mod tests {
     #[test]
     fn env_is_used_when_no_flag() {
         let env = |k: &str| (k == "BITWIG_HOST").then(|| "10.0.0.2".to_owned());
-        let cli = Config::parse(Vec::new(), env);
+        let cli = Config::parse(Vec::new(), env, &Dirs::default());
         let Ok(Cli::Run(cfg)) = cli else {
             panic!("expected Run, got {cli:?}")
         };
@@ -320,7 +337,7 @@ mod tests {
         };
         assert!(!c.install_extension);
         let env = |k: &str| (k == "BITWIG_NO_INSTALL_EXTENSION").then(|| "1".to_owned());
-        let Ok(Cli::Run(c)) = Config::parse(Vec::new(), env) else {
+        let Ok(Cli::Run(c)) = Config::parse(Vec::new(), env, &Dirs::default()) else {
             panic!()
         };
         assert!(!c.install_extension);

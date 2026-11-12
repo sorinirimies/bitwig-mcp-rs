@@ -730,6 +730,7 @@ impl OscServer {
         if !(20.0..=666.0).contains(&a.bpm) {
             return Err(bad(format!("tempo {} is outside 20..=666", a.bpm)));
         }
+        // validated range (tempo, beats, length) fits f32 well within precision
         #[allow(clippy::cast_possible_truncation)]
         let bpm = a.bpm as f32;
         self.run(
@@ -816,6 +817,7 @@ impl OscServer {
         if !a.beats.is_finite() || a.beats < 0.0 {
             return Err(bad("beats must be >= 0"));
         }
+        // validated range (tempo, beats, length) fits f32 well within precision
         #[allow(clippy::cast_possible_truncation)]
         let b = a.beats as f32;
         self.run(
@@ -1224,6 +1226,7 @@ impl OscServer {
         if !a.length_beats.is_finite() || a.length_beats <= 0.0 {
             return Err(bad("length_beats must be > 0"));
         }
+        // validated range (tempo, beats, length) fits f32 well within precision
         #[allow(clippy::cast_possible_truncation)]
         let len = a.length_beats as f32;
         self.run(
@@ -1640,6 +1643,7 @@ impl OscServer {
             .await?;
         self.osc(&format!("/track/{t}/recarm"), vec![OscType::Int(1)])
             .await?;
+        // validated range (tempo, beats, length) fits f32 well within precision
         #[allow(clippy::cast_possible_truncation)]
         let len = a.length_beats as f32;
         self.osc(

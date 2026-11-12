@@ -19,14 +19,25 @@ pub const ADD_CONTROLLER: &str = "In Bitwig: Settings → Controllers → + Add 
 vendor \"bitwig-mcp-rs\", product \"MCP bridge\" (restart Bitwig if it is not listed or after \
 updating). Pick \"MCP bridge + SysEx out\" instead only to send SysEx to hardware synths.";
 
-/// Bitwig's user folder on an OS (`linux`, `macos`, `windows`), given the home directory.
+/// Bitwig's user folder on an OS (`linux`, `macos`, `windows`): `~/Bitwig Studio` on Linux,
+/// `Documents/Bitwig Studio` elsewhere.
 #[must_use]
-pub fn bitwig_dir(os: &str, home: &Path) -> Option<PathBuf> {
+pub fn bitwig_dir(os: &str, home: Option<&Path>, documents: Option<&Path>) -> Option<PathBuf> {
     match os {
-        "linux" => Some(home.join("Bitwig Studio")),
-        "macos" | "windows" => Some(home.join("Documents").join("Bitwig Studio")),
+        "linux" => home.map(|h| h.join("Bitwig Studio")),
+        "macos" | "windows" => documents.map(|d| d.join("Bitwig Studio")),
         _ => None,
     }
+}
+
+/// Bitwig's user folder on this machine.
+#[must_use]
+pub fn system_bitwig_dir() -> Option<PathBuf> {
+    bitwig_dir(
+        std::env::consts::OS,
+        dirs::home_dir().as_deref(),
+        dirs::document_dir().as_deref(),
+    )
 }
 
 /// What [`install`] did.
@@ -116,12 +127,21 @@ mod tests {
     #[test]
     fn bitwig_folders_per_os() {
         let home = Path::new("/home/u");
-        assert_eq!(bitwig_dir("linux", home), Some(home.join("Bitwig Studio")));
+        let docs = Path::new("/Users/u/Documents");
         assert_eq!(
-            bitwig_dir("macos", home),
-            Some(home.join("Documents").join("Bitwig Studio"))
+            bitwig_dir("linux", Some(home), Some(docs)),
+            Some(home.join("Bitwig Studio"))
         );
-        assert_eq!(bitwig_dir("plan9", home), None);
+        assert_eq!(
+            bitwig_dir("macos", Some(home), Some(docs)),
+            Some(docs.join("Bitwig Studio"))
+        );
+        assert_eq!(
+            bitwig_dir("windows", None, Some(docs)),
+            Some(docs.join("Bitwig Studio"))
+        );
+        assert_eq!(bitwig_dir("linux", None, Some(docs)), None);
+        assert_eq!(bitwig_dir("plan9", Some(home), Some(docs)), None);
     }
 
     #[test]

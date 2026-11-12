@@ -41,6 +41,7 @@ impl Value {
 
     fn as_f64(&self) -> Option<f64> {
         match self {
+            // OSC integers are small (0..=16383): exact as f64
             #[allow(clippy::cast_precision_loss)]
             Self::Int(i) => Some(*i as f64),
             Self::Float(f) => Some(*f),
