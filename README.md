@@ -71,7 +71,7 @@ for the OSC backend `--send-port` (8000), `--listen-port` (9000), `--resolution`
   `create_scene`, `create_clip` (with exact notes: `{"note": "C3", "start": 0, "length": 0.5}`),
   `write_notes`, `insert_device`.
 * **Mix and play:** `set_track` (volume or `volume_db`, pan, mute, solo, arm, sends),
-  `set_device_param` (by parameter name), `transport`, `set_transport`, `clip_action`,
+  `set_device_param` (by parameter name), `set_device_params` (several at once), `transport`, `set_transport`, `clip_action`,
   `scene_action`.
 * **Everything else:** `list_actions` + `invoke_action` reach every Bitwig menu command
   (save, export, group, consolidate, …); `history` undoes.

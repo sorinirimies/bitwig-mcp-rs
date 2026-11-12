@@ -191,7 +191,100 @@ fn unit(name: &str, v: Option<f64>) -> Result<Option<f64>, McpError> {
     }
 }
 
+/// The project without the detail: what is needed to decide the next call.
+fn summarize_project(snap: &Json) -> Json {
+    fn track(t: &Json) -> Json {
+        let names = |k: &str| -> Vec<Json> {
+            t[k].as_array()
+                .map(|a| a.iter().map(|x| x["name"].clone()).collect())
+                .unwrap_or_default()
+        };
+        let mut m = serde_json::Map::new();
+        for k in ["index", "name", "type", "volume_text", "pan_text"] {
+            m.insert(k.into(), t[k].clone());
+        }
+        for k in ["mute", "solo", "arm"] {
+            if t[k] == true {
+                m.insert(k.into(), true.into());
+            }
+        }
+        m.insert("devices".into(), names("devices").into());
+        let slots: Vec<Json> = t["clips"]
+            .as_array()
+            .map(|a| a.iter().map(|c| c["slot"].clone()).collect())
+            .unwrap_or_default();
+        m.insert("clip_slots".into(), slots.into());
+        let sends: Vec<Json> = t["sends"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter(|s| s["volume"].as_f64().is_some_and(|v| v > 0.0))
+                    .map(|s| json!({"name": s["name"], "volume_text": s["volume_text"]}))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !sends.is_empty() {
+            m.insert("sends".into(), sends.into());
+        }
+        Json::Object(m)
+    }
+    let list = |k: &str| -> Vec<Json> {
+        snap[k]
+            .as_array()
+            .map(|a| a.iter().map(track).collect())
+            .unwrap_or_default()
+    };
+    let mut o = snap.as_object().cloned().unwrap_or_default();
+    o.insert("tracks".into(), list("tracks").into());
+    o.insert("effect_tracks".into(), list("effect_tracks").into());
+    if snap["master"].is_object() {
+        o.insert("master".into(), track(&snap["master"]));
+    }
+    if let Some(sc) = snap["scenes"].as_array() {
+        let sc: Vec<Json> = sc
+            .iter()
+            .map(|s| json!({"index": s["index"], "name": s["name"], "clip_count": s["clip_count"]}))
+            .collect();
+        o.insert("scenes".into(), sc.into());
+    }
+    o.insert("summary".into(), true.into());
+    Json::Object(o)
+}
+
 // ---------------------------------------------------------------- parameters
+
+/// What `get_project` returns.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct ProjectArgs {
+    /// true: every mixer value, send, device and clip in full. Default: a summary
+    /// (name, type, volume, pan, mute/solo, device names, clip slots); use `get_track` for one
+    /// track in full.
+    pub detail: Option<bool>,
+}
+
+/// A device parameter to set as part of several.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ParamSetting {
+    /// Remote-control page by name or 1-based number; default: the call's page, else current.
+    pub page: Option<Ref>,
+    /// Parameter name or 1-based number (1-8) on the page.
+    pub param: Ref,
+    /// Value 0.0-1.0.
+    pub value: f64,
+}
+
+/// Several device parameters at once.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SetParamsArgs {
+    /// Track name or 1-based number.
+    pub track: Ref,
+    /// Device name or 1-based position.
+    pub device: Ref,
+    /// Default page for settings that give none.
+    pub page: Option<Ref>,
+    /// The parameters to set, in order.
+    pub params: Vec<ParamSetting>,
+}
 
 /// A track.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -945,6 +1038,56 @@ impl BridgeServer {
             .map_err(err)
     }
 
+    /// Sets one parameter of a device found by `track_device`.
+    async fn set_param(
+        &self,
+        track: TrackAddr,
+        device: u32,
+        page: Option<&Ref>,
+        param: &Ref,
+        value: f64,
+    ) -> Result<Json, McpError> {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(bad("value must be 0.0-1.0"));
+        }
+        let page = self.page_index(track, device, page).await?;
+        let param = match param {
+            Ref::Number(0) => return Err(bad("param numbers start at 1")),
+            Ref::Number(n) => n - 1,
+            Ref::Name(name) => {
+                let d = self
+                    .call(Command::GetDevice {
+                        track,
+                        device,
+                        page,
+                    })
+                    .await?;
+                let names: Vec<String> = d["params"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|p| p["name"].as_str().unwrap_or_default().to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // the page can have gaps (Test Tone: 1, 2, 8): use the parameter's own index
+                let at = pick(&names, name, "parameter")? as usize;
+                d["params"][at]["index"]
+                    .as_u64()
+                    .and_then(|i| u32::try_from(i).ok())
+                    .ok_or_else(|| err("parameter without an index"))?
+            }
+        };
+        self.call(Command::SetDeviceParam {
+            track,
+            device,
+            page,
+            param,
+            value,
+        })
+        .await
+    }
+
     async fn project(&self) -> Result<(Json, ProjectView), McpError> {
         let snap = self.call(Command::GetProject).await?;
         let view = ProjectView::from_snapshot(&snap).map_err(err)?;
@@ -1423,10 +1566,15 @@ impl BridgeServer {
     }
 
     #[tool(
-        description = "The whole project: transport, every track (mixer, sends, devices, clips), effect tracks, master and scenes. Read this first."
+        description = "The project: transport, scenes and every track, effect track and the master. A summary by default (volume, pan, mute/solo, device names, clip slots); detail:true for everything. Read this first."
     )]
-    async fn get_project(&self) -> ToolResult {
-        out(&self.project().await?.0)
+    async fn get_project(&self, Parameters(a): Parameters<ProjectArgs>) -> ToolResult {
+        let snap = self.project().await?.0;
+        if a.detail.unwrap_or(false) {
+            out(&snap)
+        } else {
+            out(&summarize_project(&snap))
+        }
     }
 
     #[tool(
@@ -1867,47 +2015,32 @@ impl BridgeServer {
         description = "Set a device parameter (by name or 1-8 on a remote-control page) to 0.0-1.0. Replies with the value Bitwig shows, e.g. \"1.20 kHz\"."
     )]
     async fn set_device_param(&self, Parameters(a): Parameters<SetParamArgs>) -> ToolResult {
-        if !(0.0..=1.0).contains(&a.value) {
-            return Err(bad("value must be 0.0-1.0"));
+        let (track, device) = self.track_device(&a.track, &a.device).await?;
+        out(&self
+            .set_param(track, device, a.page.as_ref(), &a.param, a.value)
+            .await?)
+    }
+
+    #[tool(
+        description = "Set several device parameters in one call, by name or number, across remote-control pages (e.g. a darker sound: cutoff, resonance, release). Replies with what Bitwig shows for each."
+    )]
+    async fn set_device_params(&self, Parameters(a): Parameters<SetParamsArgs>) -> ToolResult {
+        if a.params.is_empty() {
+            return Err(bad("params is empty"));
+        }
+        if let Some(p) = a.params.iter().find(|p| !(0.0..=1.0).contains(&p.value)) {
+            return Err(bad(format!("value {} must be 0.0-1.0", p.value)));
         }
         let (track, device) = self.track_device(&a.track, &a.device).await?;
-        let page = self.page_index(track, device, a.page.as_ref()).await?;
-        let param = match &a.param {
-            Ref::Number(0) => return Err(bad("param numbers start at 1")),
-            Ref::Number(n) => n - 1,
-            Ref::Name(name) => {
-                let d = self
-                    .call(Command::GetDevice {
-                        track,
-                        device,
-                        page,
-                    })
-                    .await?;
-                let names: Vec<String> = d["params"]
-                    .as_array()
-                    .map(|a| {
-                        a.iter()
-                            .map(|p| p["name"].as_str().unwrap_or_default().to_owned())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                // the page can have gaps (Test Tone: 1, 2, 8): use the parameter's own index
-                let at = pick(&names, name, "parameter")? as usize;
-                d["params"][at]["index"]
-                    .as_u64()
-                    .and_then(|i| u32::try_from(i).ok())
-                    .ok_or_else(|| err("parameter without an index"))?
-            }
-        };
-        out(&self
-            .call(Command::SetDeviceParam {
-                track,
-                device,
-                page,
-                param,
-                value: a.value,
-            })
-            .await?)
+        let mut results = Vec::new();
+        for p in &a.params {
+            let page = p.page.as_ref().or(a.page.as_ref());
+            results.push(
+                self.set_param(track, device, page, &p.param, p.value)
+                    .await?,
+            );
+        }
+        out(&Json::Array(results))
     }
 
     #[tool(
@@ -2850,7 +2983,10 @@ impl ServerHandler for BridgeServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
         let text = match request.uri.as_str() {
-            "bitwig://project" => self.get_project().await?,
+            "bitwig://project" => {
+                self.get_project(Parameters(ProjectArgs { detail: Some(true) }))
+                    .await?
+            }
             "bitwig://instruments" => self.list_instruments().await?,
             "bitwig://devices" => {
                 serde_json::to_string_pretty(crate::devices::GUIDE).map_err(err)?
@@ -3472,6 +3608,33 @@ mod tests {
             .expect("tool");
         assert!(r.contains("\"scene\":3"), "{r}");
         assert_eq!(sent(&log, "set_scene")[0]["scene"], 2);
+    }
+
+    #[test]
+    fn project_summary_drops_the_detail() {
+        let snap = json!({
+            "application": {"project_name": "p"},
+            "tracks": [{"index": 0, "name": "Bass", "type": "Instrument", "volume_text": "-6 dB",
+                "pan_text": "0", "mute": true, "solo": false, "color": "#fff",
+                "devices": [{"name": "Polysynth", "preset": "x", "enabled": true}],
+                "clips": [{"slot": 2, "name": "a", "playing": false}],
+                "sends": [{"name": "Reverb", "volume": 0.0}, {"name": "Delay", "volume": 0.5, "volume_text": "-3 dB"}]}],
+            "effect_tracks": [],
+            "master": {"name": "Master"},
+            "scenes": [{"index": 0, "name": "Intro", "clip_count": 1, "color": "#000"}]
+        });
+        let s = summarize_project(&snap);
+        let t = &s["tracks"][0];
+        assert_eq!(t["devices"], json!(["Polysynth"]));
+        assert_eq!(t["clip_slots"], json!([2]));
+        assert_eq!(t["mute"], true);
+        assert!(t.get("solo").is_none() && t.get("color").is_none());
+        assert_eq!(
+            t["sends"],
+            json!([{"name": "Delay", "volume_text": "-3 dB"}])
+        );
+        assert!(s["scenes"][0].get("color").is_none());
+        assert_eq!(s["application"]["project_name"], "p");
     }
 
     #[tokio::test]
