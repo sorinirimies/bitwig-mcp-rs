@@ -19,6 +19,10 @@
 # Usage: nu scripts/ci/quality_gate.nu [--skip-fmt] [--skip-test] [--skip-nu]
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Compiles the fuzz crate (its own workspace, so clippy and test never see it): on stable,
+# `cargo check` is enough to catch a broken import before CI does.
+export const FUZZ_CHECK = ["cargo" "check" "--manifest-path" "fuzz/Cargo.toml" "--bins" "--quiet"]
+
 def run_step [label: string, cmd: closure]: nothing -> bool {
     print $"(ansi cyan)▶(ansi reset) ($label)"
     let r = (do $cmd | complete)
@@ -58,7 +62,7 @@ def main [--skip-fmt, --skip-test, --skip-nu] {
     }
     $ok = (run_step "bitwig bridge extension (javac)" { nu scripts/bridge.nu check }) and $ok
     $ok = (run_step "fuzz targets compile" {
-        cargo check --manifest-path fuzz/Cargo.toml --bins --quiet
+        run-external $FUZZ_CHECK.0 ...($FUZZ_CHECK | skip 1)
     }) and $ok
     if not $ok {
         print $"(ansi red)✗ Quality gate FAILED(ansi reset)"

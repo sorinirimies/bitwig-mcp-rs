@@ -4,7 +4,7 @@
 
 use std/assert
 use runner.nu *
-use ../bump_version.nu [is_semver compare_versions set_workspace_version set_extension_version stageable]
+use ../bump_version.nu [is_semver compare_versions set_workspace_version set_extension_version stageable extension_step BUNDLED_EXTENSION]
 
 const CARGO = '[package]
 name = "bitwig-mcp-rs"
@@ -90,6 +90,18 @@ def "test bump: setting the same version is a no-op on content" [] {
 
 def "test bump: an ignored lockfile is not staged" [] {
     assert equal (stageable ["scripts" "no/such/file" "Cargo.lock"] ["Cargo.lock"]) ["scripts"]
+}
+
+def "test bump: the bundled extension is rebuilt, or the bump fails without javac" [] {
+    assert equal (extension_step false false) "none"
+    assert equal (extension_step false true) "none"
+    assert equal (extension_step true true) "rebuild"
+    assert equal (extension_step true false) "need-javac"
+}
+
+def "test bump: the bundled extension is where the crate embeds it" [] {
+    let root = ($env.CURRENT_FILE | path dirname | path join ".." "..")
+    assert ($root | path join $BUNDLED_EXTENSION | path exists) "BUNDLED_EXTENSION points at the real file"
 }
 
 def main [] { run-tests }

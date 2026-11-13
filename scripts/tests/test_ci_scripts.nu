@@ -12,6 +12,14 @@ use ../ci/prune_releases.nu [from_gh from_gitea doomed newest]
 use ../ci/gitea_release.nu [release_payload]
 use ../ci/auto_merge.nu [decide checks_green sweep_action]
 use ../ci/actions_update.nu [uses major_of bump PINNED]
+use ../ci/quality_gate.nu [FUZZ_CHECK]
+
+def "test quality_gate: the fuzz crate is checked, and it exists" [] {
+    let root = ($env.CURRENT_FILE | path dirname | path join ".." "..")
+    let manifest = ($FUZZ_CHECK | skip until {|a| $a == "--manifest-path" } | get 1)
+    assert ($root | path join $manifest | path exists) "the manifest the gate checks exists"
+    assert ("--bins" in $FUZZ_CHECK) "every fuzz target is compiled"
+}
 
 def "test deps_update: commit message is a dated chore deps" [] {
     assert equal (commit_message "2026-01-02") "chore(deps): nightly cargo update 2026-01-02"

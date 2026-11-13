@@ -97,6 +97,15 @@ export def set_extension_version [text: string, version: string]: nothing -> str
     ($out | str join "\n") + "\n"
 }
 
+# The bundled Bitwig extension carries the version (BuildInfo), so a bump rebuilds it.
+export const BUNDLED_EXTENSION = "crates/bitwig-mcp-rs/extension/bitwig-mcp-rs.bwextension"
+
+# What the bump does about the bundled extension: "none" (no bundle in this repo),
+# "rebuild", or "need-javac" (a bundle exists but it cannot be rebuilt: fail the bump).
+export def extension_step [bundle_exists: bool, javac_found: bool]: nothing -> string {
+    if not $bundle_exists { "none" } else if $javac_found { "rebuild" } else { "need-javac" }
+}
+
 use ci/check_versions.nu [EXTRA_MANIFESTS]
 use version.nu [cargo_version]
 
@@ -188,15 +197,14 @@ def main [
         }
         print $"(ansi green)✓(ansi reset) Cargo.lock updated."
 
-        # The bundled Bitwig extension carries the version (BuildInfo): rebuild it so
-        # it reports the release version, not the previous one.
-        let embedded = "crates/bitwig-mcp-rs/extension/bitwig-mcp-rs.bwextension"
-        if ($embedded | path exists) {
-            if (which javac | is-empty) {
-                error make --unspanned { msg: "javac not found: the bundled extension must be rebuilt for the new version" }
+        # Rebuild the bundled extension so it reports the release version.
+        match (extension_step ($BUNDLED_EXTENSION | path exists) (which javac | is-not-empty)) {
+            "need-javac" => { error make --unspanned { msg: "javac not found: the bundled extension must be rebuilt for the new version" } }
+            "rebuild" => {
+                nu scripts/bridge.nu embed
+                print $"(ansi green)✓(ansi reset) Bitwig extension rebuilt for ($new_version)."
             }
-            nu scripts/bridge.nu embed
-            print $"(ansi green)✓(ansi reset) Bitwig extension rebuilt for ($new_version)."
+            _ => {}
         }
 
         if (which git-cliff | is-not-empty) {
@@ -206,7 +214,7 @@ def main [
             print $"(ansi yellow)⚠(ansi reset) git-cliff not found — CHANGELOG.md unchanged."
         }
 
-        ^git add ...(stageable $TOUCHED (^git check-ignore ...$TOUCHED | complete | get stdout | lines)) ...$EXTRA_MANIFESTS crates/bitwig-mcp-rs/extension
+        ^git add ...(stageable $TOUCHED (^git check-ignore ...$TOUCHED | complete | get stdout | lines)) ...$EXTRA_MANIFESTS ($BUNDLED_EXTENSION | path dirname)
         ^git commit -m $"chore: bump version to ($new_version)"
         ^git tag -a $tag -m $"Release ($tag)"
         print $"(ansi green)✓(ansi reset) Committed and tagged ($tag)."
