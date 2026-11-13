@@ -4,6 +4,16 @@ All notable changes to this project are documented here. It is generated from
 [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org) — do not edit it by hand.
 
+## [0.2.4](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.2.3...v0.2.4) — 2026-11-13
+
+### ♻️ Refactor
+
+- Split bridge/server.rs into server/{mod,helpers,prompts,testkit} and one tools module per area ([`54b1999`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/54b19992c1183880c8c5038338ade7f6210ef63c))
+
+### 🧪 Tests
+
+- Bump rebuilds the bundled extension and the gate checks the fuzz crate, both covered by nu tests ([`1d8dd21`](https://github.com/sorinirimies/bitwig-mcp-rs/commit/1d8dd21145061b87e2a8c3b84b5b3157dd0f9f74))
+
 ## [0.2.2](https://github.com/sorinirimies/bitwig-mcp-rs/compare/v0.2.1...v0.2.2) — 2026-11-12
 
 ### 📚 Documentation
