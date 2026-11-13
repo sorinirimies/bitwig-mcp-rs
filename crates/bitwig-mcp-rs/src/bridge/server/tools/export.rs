@@ -2,6 +2,33 @@
 
 use super::super::*;
 
+/// The commands that start a capture: back to the start, then either launch the scene or play the
+/// arranger. Launching a scene starts the transport by itself, and a `Play` after it toggles the
+/// transport off again (the clips die after a few seconds), so a scene gets no `Play`.
+fn capture_start(scene: Option<u32>) -> Vec<Command> {
+    let mut cmds = vec![
+        Command::Transport {
+            action: TransportAction::Stop,
+        },
+        Command::SetTransport {
+            change: TransportChange {
+                position: Some(0.0),
+                ..TransportChange::default()
+            },
+        },
+    ];
+    cmds.push(match scene {
+        Some(scene) => Command::SceneAction {
+            scene,
+            action: SceneAction::Launch,
+        },
+        None => Command::Transport {
+            action: TransportAction::Play,
+        },
+    });
+    cmds
+}
+
 /// A clip.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ClipRef {
@@ -170,32 +197,9 @@ impl BridgeServer {
                 &wav,
                 Duration::from_secs_f64(tail),
                 || async move {
-                    bridge
-                        .call(Command::Transport {
-                            action: TransportAction::Stop,
-                        })
-                        .await?;
-                    bridge
-                        .call(Command::SetTransport {
-                            change: TransportChange {
-                                position: Some(0.0),
-                                ..TransportChange::default()
-                            },
-                        })
-                        .await?;
-                    if let Some(sc) = scene {
-                        bridge
-                            .call(Command::SceneAction {
-                                scene: sc,
-                                action: SceneAction::Launch,
-                            })
-                            .await?;
+                    for c in capture_start(scene) {
+                        bridge.call(c).await?;
                     }
-                    bridge
-                        .call(Command::Transport {
-                            action: TransportAction::Play,
-                        })
-                        .await?;
                     tokio::time::sleep(Duration::from_secs_f64(seconds)).await;
                     bridge
                         .call(Command::Transport {
@@ -230,5 +234,39 @@ impl BridgeServer {
             }));
         }
         out(&json!({"bars": bars, "seconds": seconds + tail, "files": files}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(cmds: &[Command]) -> Vec<String> {
+        cmds.iter()
+            .map(|c| {
+                serde_json::to_value(c).map_or_else(
+                    |_| String::new(),
+                    |v| v["cmd"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_scene_capture_launches_the_scene_and_never_plays() {
+        let cmds = capture_start(Some(2));
+        assert_eq!(names(&cmds), ["transport", "set_transport", "scene_action"]);
+    }
+
+    #[test]
+    fn an_arranger_capture_plays_from_the_start() {
+        let cmds = capture_start(None);
+        assert_eq!(names(&cmds), ["transport", "set_transport", "transport"]);
+        assert!(matches!(
+            &cmds[2],
+            Command::Transport {
+                action: TransportAction::Play
+            }
+        ));
     }
 }
